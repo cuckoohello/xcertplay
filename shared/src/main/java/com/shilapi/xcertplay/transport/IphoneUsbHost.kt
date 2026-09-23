@@ -1,6 +1,8 @@
 package com.shilapi.xcertplay.transport
 
 import android.app.PendingIntent
+import android.annotation.SuppressLint
+import android.annotation.TargetApi
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -68,8 +70,15 @@ class IphoneUsbHost(
     private val usbManager: UsbManager,
     private val matcher: IphoneUsbMatcher,
     private val permissionAction: String = "${context.packageName}.IPHONE_USB_PERMISSION",
+    private val carPlayConfigurationId: Int? = null,
 ) {
     private val appContext = context.applicationContext
+
+    init {
+        require(carPlayConfigurationId == null || carPlayConfigurationId in 1..0xff) {
+            "carPlayConfigurationId must be in 1..255"
+        }
+    }
 
     sealed class PermissionRequest {
         data class AlreadyGranted(val device: UsbDevice) : PermissionRequest()
@@ -239,7 +248,7 @@ class IphoneUsbHost(
             ?: throw IphoneUsbException.DeviceUnavailable("UsbManager could not open the iPhone")
         var claimedInterface: UsbInterface? = null
         try {
-            val configuration = IphoneCarPlayConfiguration.find(device)
+            val configuration = carPlayConfiguration(device)
                 ?: throw IphoneUsbException.Protocol(
                     "Re-enumerated iPhone exposes no USBMUX CarPlay configuration",
                 )
@@ -276,16 +285,26 @@ class IphoneUsbHost(
         }
     }
 
+    private fun carPlayConfiguration(device: UsbDevice): UsbConfiguration? =
+        if (carPlayConfigurationId == null) {
+            IphoneCarPlayConfiguration.find(device)
+        } else {
+            IphoneCarPlayConfiguration.find(device, carPlayConfigurationId)
+        }
+
     private fun permissionPendingIntent(): PendingIntent {
         val intent = Intent(permissionAction).setPackage(appContext.packageName)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
         return PendingIntent.getBroadcast(
             appContext,
             0,
             intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            flags,
         )
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerReceiver(filter: IntentFilter, onReceive: (Intent) -> Unit): Closeable {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) = onReceive(intent)
@@ -351,6 +370,26 @@ class Iap2UsbSession internal constructor(
     fun read(timeoutMillis: Long): ByteArray? = synchronized(readLock) {
         checkOpen()
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return@synchronized readLegacy(timeoutMillis)
+        }
+        readModern(timeoutMillis)
+    }
+
+    private fun readLegacy(timeoutMillis: Long): ByteArray? {
+        val buffer = ByteArray(USBMUX_READ_CHUNK_BYTES)
+        val transferred = connection.bulkTransfer(
+            inEndpoint,
+            buffer,
+            buffer.size,
+            timeoutMillis.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+        )
+        return if (transferred <= 0) null else buffer.copyOf(transferred)
+    }
+
+    @SuppressLint("UseRequiresApi")
+    @TargetApi(Build.VERSION_CODES.O)
+    private fun readModern(timeoutMillis: Long): ByteArray? {
         val request = UsbRequest()
         var initialized = false
         try {
@@ -370,7 +409,7 @@ class Iap2UsbSession internal constructor(
                 connection.requestWait(timeoutMillis)
             } catch (_: TimeoutException) {
                 drainCancelledRead(request)
-                return@synchronized null
+                return null
             }
             if (completed == null) {
                 throw failSession("Android returned no USBMUX read request")
@@ -378,7 +417,7 @@ class Iap2UsbSession internal constructor(
             if (completed !== request) {
                 throw failSession("Android completed an unexpected USB request")
             }
-            return@synchronized ByteArray(buffer.position()).also {
+            return ByteArray(buffer.position()).also {
                 buffer.flip()
                 buffer.get(it)
             }
@@ -414,6 +453,8 @@ class Iap2UsbSession internal constructor(
         if (closed) throw IphoneUsbException.DeviceUnavailable("USBMUX session is closed")
     }
 
+    @SuppressLint("UseRequiresApi")
+    @TargetApi(Build.VERSION_CODES.O)
     private fun drainCancelledRead(request: UsbRequest) {
         if (!request.cancel()) {
             throw failSession("Android could not cancel timed out USBMUX read request")

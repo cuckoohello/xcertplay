@@ -1,0 +1,94 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace = 'com.shilapi.xcertplay.e01shared'
+    compileSdk = 37
+
+    defaultConfig {
+        minSdk = 22
+        targetSdk = 22
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = ['../shared/src/main/java']
+            kotlin.srcDirs = ['../shared/src/main/java']
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+            java.exclude(
+                'com/shilapi/xcertplay/location/**',
+                'com/shilapi/xcertplay/network/CarPlayBonjour.kt',
+                'com/shilapi/xcertplay/network/LocalOnlyHotspotManager.kt',
+                'com/shilapi/xcertplay/network/ManualHotspotManager.kt',
+                'com/shilapi/xcertplay/network/WifiP2pGroupManager.kt',
+                'com/shilapi/xcertplay/network/WirelessHotspotManager.kt',
+                'com/shilapi/xcertplay/orchestration/**',
+                'com/shilapi/xcertplay/shared/**',
+                'com/shilapi/xcertplay/transport/BluetoothRfcommDuplexStream.kt',
+                'com/shilapi/xcertplay/transport/Ch341DeviceMatcher.kt',
+                'com/shilapi/xcertplay/transport/Ch341I2cStreamEncoder.kt',
+                'com/shilapi/xcertplay/transport/Ch341I2cTransport.kt',
+                'com/shilapi/xcertplay/transport/Ch341UsbHost.kt',
+                'com/shilapi/xcertplay/transport/Iap2WirelessControlClient.kt',
+                'com/shilapi/xcertplay/transport/LinuxI2cTransport.kt',
+            )
+            kotlin.exclude(
+                'com/shilapi/xcertplay/location/**',
+                'com/shilapi/xcertplay/network/CarPlayBonjour.kt',
+                'com/shilapi/xcertplay/network/LocalOnlyHotspotManager.kt',
+                'com/shilapi/xcertplay/network/ManualHotspotManager.kt',
+                'com/shilapi/xcertplay/network/WifiP2pGroupManager.kt',
+                'com/shilapi/xcertplay/network/WirelessHotspotManager.kt',
+                'com/shilapi/xcertplay/orchestration/**',
+                'com/shilapi/xcertplay/shared/**',
+                'com/shilapi/xcertplay/transport/BluetoothRfcommDuplexStream.kt',
+                'com/shilapi/xcertplay/transport/Ch341DeviceMatcher.kt',
+                'com/shilapi/xcertplay/transport/Ch341I2cStreamEncoder.kt',
+                'com/shilapi/xcertplay/transport/Ch341I2cTransport.kt',
+                'com/shilapi/xcertplay/transport/Ch341UsbHost.kt',
+                'com/shilapi/xcertplay/transport/Iap2WirelessControlClient.kt',
+                'com/shilapi/xcertplay/transport/LinuxI2cTransport.kt',
+            )
+        }
+        test {
+            java.srcDirs = ['../shared/src/test/java']
+            kotlin.srcDirs = ['../shared/src/test/java']
+            java.exclude(
+                'com/shilapi/xcertplay/network/**',
+                'com/shilapi/xcertplay/orchestration/**',
+                'com/shilapi/xcertplay/transport/Ch341DeviceMatcherTest.kt',
+                'com/shilapi/xcertplay/transport/Ch341I2cStreamEncoderTest.kt',
+                'com/shilapi/xcertplay/transport/Iap2WirelessControlClientTest.kt',
+                'com/shilapi/xcertplay/transport/LinuxI2cTransportTest.kt',
+            )
+            kotlin.exclude(
+                'com/shilapi/xcertplay/network/**',
+                'com/shilapi/xcertplay/orchestration/**',
+                'com/shilapi/xcertplay/transport/Ch341DeviceMatcherTest.kt',
+                'com/shilapi/xcertplay/transport/Ch341I2cStreamEncoderTest.kt',
+                'com/shilapi/xcertplay/transport/Iap2WirelessControlClientTest.kt',
+                'com/shilapi/xcertplay/transport/LinuxI2cTransportTest.kt',
+            )
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
+        lintConfig = file('lint.xml')
+        // This APK is side-loaded onto Android 5.1 and deliberately preserves legacy behavior.
+        disable += ['ExpiredTargetSdkVersion']
+    }
+}
+
+dependencies {
+    implementation libs.bouncycastle
+    testImplementation libs.junit
+}

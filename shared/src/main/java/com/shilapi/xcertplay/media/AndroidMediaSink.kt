@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.media
 
 import android.media.AudioAttributes
 import android.media.AudioFormat as AndroidAudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaCodecList
@@ -47,7 +48,13 @@ class AndroidMediaSink(
     }
 
     fun clearSurface(type: Int, surface: Surface) {
-        if (surfaces.remove(type, surface)) videoDecoders[type]?.setSurface(null)
+        val removed = synchronized(surfaces) {
+            if (surfaces[type] !== surface) false else {
+                surfaces.remove(type)
+                true
+            }
+        }
+        if (removed) videoDecoders[type]?.setSurface(null)
     }
 
     fun setScreenStreamActiveChangedListener(listener: ((Int, Boolean) -> Unit)?) {
@@ -84,8 +91,14 @@ class AndroidMediaSink(
     }
 
     override fun onMicrophoneStarted(type: Int, config: MicrophoneConfig) {
-        val uplink = microphoneUplinks.computeIfAbsent(type) { MicrophoneUplink(config) }
-        if (!uplink.start()) microphoneUplinks.remove(type, uplink)
+        val uplink = microphoneUplinks[type] ?: MicrophoneUplink(config).let { created ->
+            microphoneUplinks.putIfAbsent(type, created) ?: created
+        }
+        if (!uplink.start()) {
+            synchronized(microphoneUplinks) {
+                if (microphoneUplinks[type] === uplink) microphoneUplinks.remove(type)
+            }
+        }
     }
 
     override fun onMicrophoneStopped(type: Int) {
@@ -101,15 +114,18 @@ class AndroidMediaSink(
         microphoneUplinks.clear()
     }
 
-    private fun videoDecoder(type: Int): VideoDecoder =
-        videoDecoders.computeIfAbsent(type) {
-            VideoDecoder(
-                surfaces[type] ?: defaultSurface,
-                videoWidth,
-                videoHeight,
-                preferSoftwareHevcDecoder,
-            )
-        }
+    private fun videoDecoder(type: Int): VideoDecoder {
+        videoDecoders[type]?.let { return it }
+        val created = VideoDecoder(
+            surfaces[type] ?: defaultSurface,
+            videoWidth,
+            videoHeight,
+            preferSoftwareHevcDecoder,
+        )
+        val existing = videoDecoders.putIfAbsent(type, created)
+        if (existing != null) created.close()
+        return existing ?: created
+    }
 
     @Synchronized
     private fun audioRenderer(type: Int, format: AudioFormat): AudioRenderer {
@@ -262,7 +278,7 @@ private class VideoDecoder(
             return
         }
         val codec = decoder
-        if (codec != null) {
+        if (codec != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             try {
                 codec.setOutputSurface(surface)
                 Log.i(TAG, "video decoder output surface updated")
@@ -327,11 +343,11 @@ private class VideoDecoder(
             "video decoder output format " +
                 "size=${format.intOrNull(MediaFormat.KEY_WIDTH)}x" +
                 "${format.intOrNull(MediaFormat.KEY_HEIGHT)} " +
-                "stride=${format.intOrNull(MediaFormat.KEY_STRIDE)} " +
-                "slice=${format.intOrNull(MediaFormat.KEY_SLICE_HEIGHT)} " +
-                "standard=${format.intOrNull(MediaFormat.KEY_COLOR_STANDARD)} " +
-                "range=${format.intOrNull(MediaFormat.KEY_COLOR_RANGE)} " +
-                "transfer=${format.intOrNull(MediaFormat.KEY_COLOR_TRANSFER)}",
+                "stride=${format.intOrNull(KEY_STRIDE_COMPAT)} " +
+                "slice=${format.intOrNull(KEY_SLICE_HEIGHT_COMPAT)} " +
+                "standard=${format.intOrNull(KEY_COLOR_STANDARD_COMPAT)} " +
+                "range=${format.intOrNull(KEY_COLOR_RANGE_COMPAT)} " +
+                "transfer=${format.intOrNull(KEY_COLOR_TRANSFER_COMPAT)}",
         )
     }
 
@@ -357,6 +373,11 @@ private class VideoDecoder(
         const val TAG = "xcertplay-usb"
         const val MAX_INPUT_SIZE = 8 * 1024 * 1024
         const val INPUT_TIMEOUT_US = 10_000L
+        const val KEY_STRIDE_COMPAT = "stride"
+        const val KEY_SLICE_HEIGHT_COMPAT = "slice-height"
+        const val KEY_COLOR_STANDARD_COMPAT = "color-standard"
+        const val KEY_COLOR_RANGE_COMPAT = "color-range"
+        const val KEY_COLOR_TRANSFER_COMPAT = "color-transfer"
         val START_CODE = byteArrayOf(0x00, 0x00, 0x00, 0x01)
     }
 }
@@ -486,18 +507,30 @@ private class AudioRenderer(
         } else {
             maxOf(minBuffer, MIN_START_BUFFER_BYTES)
         }
-        track = AudioTrack.Builder()
-            .setAudioAttributes(audioAttributes())
-            .setAudioFormat(
-                AndroidAudioFormat.Builder()
-                    .setEncoding(encoding)
-                    .setSampleRate(format.sampleRate)
-                    .setChannelMask(channelMask)
-                    .build(),
+        track = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            AudioTrack.Builder()
+                .setAudioAttributes(audioAttributes())
+                .setAudioFormat(
+                    AndroidAudioFormat.Builder()
+                        .setEncoding(encoding)
+                        .setSampleRate(format.sampleRate)
+                        .setChannelMask(channelMask)
+                        .build(),
+                )
+                .setBufferSizeInBytes(bufferBytes)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            AudioTrack(
+                legacyStreamType(),
+                format.sampleRate,
+                channelMask,
+                encoding,
+                bufferBytes,
+                AudioTrack.MODE_STREAM,
             )
-            .setBufferSizeInBytes(bufferBytes)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
+        }
         Log.i(
             TAG,
             "audio track prepared type=${format.payloadType} audioType=${format.audioType} " +
@@ -544,8 +577,25 @@ private class AudioRenderer(
     private fun usageFor(channel: AudioChannel): Int = when (channel) {
         AudioChannel.MEDIA -> AudioAttributes.USAGE_MEDIA
         AudioChannel.PHONE -> AudioAttributes.USAGE_VOICE_COMMUNICATION
-        AudioChannel.ASSISTANT -> AudioAttributes.USAGE_ASSISTANT
+        AudioChannel.ASSISTANT ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                AudioAttributes.USAGE_ASSISTANT
+            } else {
+                AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+            }
         AudioChannel.NAVIGATION -> AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+    }
+
+    private fun legacyStreamType(): Int {
+        val selection = AudioChannelMapper.map(
+            audioType = format.audioType,
+            payloadType = format.payloadType,
+            mode = AudioChannelMappingMode.MOBILE_COMPATIBLE,
+        )
+        return when (selection.channel) {
+            AudioChannel.PHONE -> AudioManager.STREAM_VOICE_CALL
+            else -> AudioManager.STREAM_MUSIC
+        }
     }
 
     private fun contentTypeFor(contentType: AudioContentType): Int = when (contentType) {
@@ -718,7 +768,12 @@ private class AudioRenderer(
             } else {
                 minOf(length - written, PREBUFFER_WRITE_CHUNK_BYTES)
             }
-            val count = track.write(data, offset + written, writeLength, AudioTrack.WRITE_BLOCKING)
+            val count = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                track.write(data, offset + written, writeLength, AudioTrack.WRITE_BLOCKING)
+            } else {
+                @Suppress("DEPRECATION")
+                track.write(data, offset + written, writeLength)
+            }
             if (count <= 0) break
             written += count
             if (!playbackStarted) {

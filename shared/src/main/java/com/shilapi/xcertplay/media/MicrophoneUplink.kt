@@ -3,6 +3,7 @@ package com.shilapi.xcertplay.media
 import android.media.AudioFormat as AndroidAudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import android.util.Log
 import com.shilapi.xcertplay.airplay.AudioCodecKind
 import com.shilapi.xcertplay.airplay.MicrophoneConfig
@@ -66,17 +67,28 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
         }
         val bufferSize = maxOf(minBuffer * 2, config.frameBytes * 4)
         val nextRecorder = try {
-            AudioRecord.Builder()
-                .setAudioSource(source)
-                .setAudioFormat(
-                    AndroidAudioFormat.Builder()
-                        .setEncoding(AndroidAudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(config.sampleRate)
-                        .setChannelMask(channelMask)
-                        .build(),
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                AudioRecord.Builder()
+                    .setAudioSource(source)
+                    .setAudioFormat(
+                        AndroidAudioFormat.Builder()
+                            .setEncoding(AndroidAudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(config.sampleRate)
+                            .setChannelMask(channelMask)
+                            .build(),
+                    )
+                    .setBufferSizeInBytes(bufferSize)
+                    .build()
+            } else {
+                @Suppress("DEPRECATION")
+                AudioRecord(
+                    source,
+                    config.sampleRate,
+                    channelMask,
+                    AndroidAudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize,
                 )
-                .setBufferSizeInBytes(bufferSize)
-                .build()
+            }
         } catch (error: Exception) {
             Log.e(TAG, "microphone recorder creation failed", error)
             nextEncoder?.close()
@@ -134,7 +146,12 @@ internal class MicrophoneUplink(private val config: MicrophoneConfig) : Closeabl
         var filled = 0
         try {
             while (running.get()) {
-                val count = recorder.read(readBuffer, 0, readBuffer.size, AudioRecord.READ_BLOCKING)
+                val count = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    recorder.read(readBuffer, 0, readBuffer.size, AudioRecord.READ_BLOCKING)
+                } else {
+                    @Suppress("DEPRECATION")
+                    recorder.read(readBuffer, 0, readBuffer.size)
+                }
                 if (count < 0) {
                     if (running.get()) Log.e(TAG, "microphone read failed code=$count")
                     return

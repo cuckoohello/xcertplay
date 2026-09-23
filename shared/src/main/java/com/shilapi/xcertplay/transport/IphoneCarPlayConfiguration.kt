@@ -31,12 +31,30 @@ object IphoneCarPlayConfiguration {
         val configurations = (0 until device.configurationCount).map(device::getConfiguration)
         val chosen = configurations.firstOrNull { usbMuxInterface(it) != null && hasCdcNcm(it) && hasAppleEthernet(it) }
             ?: configurations.firstOrNull { usbMuxInterface(it) != null && hasCdcNcm(it) }
+        logSelection(configurations, chosen)
+        return chosen
+    }
+
+    /** Returns only the requested complete USBMUX + NCM configuration. */
+    fun find(device: UsbDevice, configurationId: Int): UsbConfiguration? {
+        require(configurationId in 1..0xff) { "configurationId must be in 1..255" }
+        val configurations = (0 until device.configurationCount).map(device::getConfiguration)
+        val chosen = configurations.firstOrNull {
+            it.id == configurationId && usbMuxInterface(it) != null && hasCdcNcm(it)
+        }
+        logSelection(configurations, chosen)
+        return chosen
+    }
+
+    private fun logSelection(
+        configurations: List<UsbConfiguration>,
+        chosen: UsbConfiguration?,
+    ) {
         Log.i(
             TAG,
             "carplay config chosen=${chosen?.id} " +
                 "available=${configurations.map { it.id }} detail=${chosen?.let(::describe)}",
         )
-        return chosen
     }
 
     fun describe(configuration: UsbConfiguration): String =

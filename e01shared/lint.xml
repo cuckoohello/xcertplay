@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- AGP lint scans the external shared source root before Kotlin source-set exclusions. -->
+    <issue id="HardwareIds,InlinedApi,MissingPermission,NewApi,WifiManagerPotentialLeak">
+        <ignore regexp=".*/shared/src/main/java/com/shilapi/xcertplay/(location|orchestration|shared)/.*" />
+        <ignore regexp=".*/shared/src/main/java/com/shilapi/xcertplay/network/(CarPlayBonjour|LocalOnlyHotspotManager|ManualHotspotManager|WifiP2pGroupManager|WirelessHotspotManager)\.kt" />
+        <ignore regexp=".*/shared/src/main/java/com/shilapi/xcertplay/transport/(BluetoothRfcommDuplexStream|Ch341DeviceMatcher|Ch341I2cStreamEncoder|Ch341I2cTransport|Ch341UsbHost|Iap2WirelessControlClient|LinuxI2cTransport)\.kt" />
+    </issue>
+    <issue id="MissingPermission">
+        <!-- E01 constructs CarPlayMediaEngine with microphoneEnabled=false. -->
+        <ignore regexp=".*/shared/src/main/java/com/shilapi/xcertplay/media/MicrophoneUplink\.kt" />
+    </issue>
+</lint>
