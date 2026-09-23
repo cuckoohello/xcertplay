@@ -17,6 +17,7 @@ internal object E01Persistence {
     private const val PREFS = "e01_wired_carplay"
     private const val KEY_REMOTE_SERVER = "remote_mfi_server"
     private const val KEY_REMOTE_TOKEN = "remote_mfi_token"
+    private const val KEY_NO_MFI_DIAGNOSTIC = "no_mfi_diagnostic"
     private const val KEY_IDENTITY_PRIVATE = "identity_private"
     private const val KEY_IDENTITY_PUBLIC = "identity_public"
     private const val KEY_PAIRING_ID = "pairing_id"
@@ -44,6 +45,15 @@ internal object E01Persistence {
         prefs(context).edit()
             .putString(KEY_REMOTE_SERVER, settings.serverUrl.trim())
             .putString(KEY_REMOTE_TOKEN, settings.bearerToken)
+            .apply()
+    }
+
+    fun loadNoMfiDiagnostic(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_NO_MFI_DIAGNOSTIC, false)
+
+    fun saveNoMfiDiagnostic(context: Context, enabled: Boolean) {
+        prefs(context).edit()
+            .putBoolean(KEY_NO_MFI_DIAGNOSTIC, enabled)
             .apply()
     }
 

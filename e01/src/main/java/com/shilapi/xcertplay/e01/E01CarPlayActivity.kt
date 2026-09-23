@@ -26,6 +26,7 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import com.shilapi.xcertplay.airplay.AirPlayConfig
 import com.shilapi.xcertplay.airplay.AirPlayDeviceInfo
@@ -52,6 +53,7 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var statusText: TextView
     private lateinit var logView: TextView
     private lateinit var settingsOverlay: View
+    private lateinit var diagnosticSwitch: Switch
     private lateinit var serverInput: EditText
     private lateinit var tokenInput: EditText
 
@@ -72,8 +74,10 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         val settings = E01Persistence.loadRemoteMfi(this)
         serverInput.setText(settings.serverUrl)
         tokenInput.setText(settings.bearerToken)
+        diagnosticSwitch.isChecked = E01Persistence.loadNoMfiDiagnostic(this)
+        updateMfiInputsEnabled()
         appendLog("E01 wired host ready")
-        if (settings.serverUrl.isBlank()) {
+        if (!diagnosticSwitch.isChecked && settings.serverUrl.isBlank()) {
             showSettings(true)
             updateStatus("config", "Remote MFi server is required", failed = true)
         } else {
@@ -294,6 +298,22 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         )
         panel.addView(header)
 
+        panel.addView(sectionLabel("MODE"))
+        diagnosticSwitch = Switch(this).apply {
+            text = "No-MFi diagnostics"
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            setPadding(0, dp(4), 0, dp(8))
+            setOnCheckedChangeListener { _, _ -> updateMfiInputsEnabled() }
+        }
+        panel.addView(
+            diagnosticSwitch,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52),
+            ),
+        )
+
         panel.addView(sectionLabel("REMOTE MFI"))
         panel.addView(fieldLabel("Server URL"))
         serverInput = editText(
@@ -356,13 +376,17 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     private fun saveAndConnect() {
         val server = serverInput.text.toString().trim().trimEnd('/')
         val token = tokenInput.text.toString()
-        val validationError = validateServer(server)
-        if (validationError != null) {
-            serverInput.error = validationError
-            return
+        val diagnosticMode = diagnosticSwitch.isChecked
+        if (!diagnosticMode) {
+            val validationError = validateServer(server)
+            if (validationError != null) {
+                serverInput.error = validationError
+                return
+            }
         }
         E01Persistence.saveRemoteMfi(this, RemoteMfiSettings(server, token))
-        appendLog("Remote MFi settings saved")
+        E01Persistence.saveNoMfiDiagnostic(this, diagnosticMode)
+        appendLog(if (diagnosticMode) "No-MFi diagnostic mode enabled" else "Remote MFi settings saved")
         showSettings(false)
         ensureVpnAndStart()
     }
@@ -400,9 +424,14 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
 
     private fun ensureVpnAndStart() {
         val settings = E01Persistence.loadRemoteMfi(this)
-        if (settings.serverUrl.isBlank()) {
+        val diagnosticMode = E01Persistence.loadNoMfiDiagnostic(this)
+        if (!diagnosticMode && settings.serverUrl.isBlank()) {
             showSettings(true)
             updateStatus("config", "Remote MFi server is required", failed = true)
+            return
+        }
+        if (diagnosticMode) {
+            restartController()
             return
         }
         val consent = CarPlayVpnService.prepare(this)
@@ -418,7 +447,8 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
 
     private fun restartController() {
         val settings = E01Persistence.loadRemoteMfi(this)
-        if (settings.serverUrl.isBlank()) {
+        val diagnosticMode = E01Persistence.loadNoMfiDiagnostic(this)
+        if (!diagnosticMode && settings.serverUrl.isBlank()) {
             showSettings(true)
             updateStatus("config", "Remote MFi server is required", failed = true)
             return
@@ -436,14 +466,18 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         mainHandler.postDelayed(
             {
                 if (generation == restartGeneration && !isFinishing) {
-                    startController(settings, generation)
+                    startController(settings, diagnosticMode, generation)
                 }
             },
             if (oldController == null) 0L else RESTART_DELAY_MILLIS,
         )
     }
 
-    private fun startController(settings: RemoteMfiSettings, generation: Int) {
+    private fun startController(
+        settings: RemoteMfiSettings,
+        diagnosticMode: Boolean,
+        generation: Int,
+    ) {
         val sink = AndroidMediaSink(
             surface = null,
             videoWidth = DISPLAY_WIDTH,
@@ -479,6 +513,7 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
             loadPairRecord = { E01Persistence.loadLockdownRecord(this) },
             savePairRecord = { E01Persistence.saveLockdownRecord(this, it) },
             clearPairRecord = { E01Persistence.clearLockdownRecord(this) },
+            noMfiDiagnostic = diagnosticMode,
         )
         controller = next
         try {
@@ -566,6 +601,15 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     private fun forwardTouch(view: View, event: MotionEvent) {
         val contacts = CarPlayTouchMapper.contacts(event, view.width, view.height)
         controller?.sendTouch(contacts)
+    }
+
+    private fun updateMfiInputsEnabled() {
+        if (!::serverInput.isInitialized || !::tokenInput.isInitialized) return
+        val enabled = !diagnosticSwitch.isChecked
+        serverInput.isEnabled = enabled
+        tokenInput.isEnabled = enabled
+        serverInput.alpha = if (enabled) 1f else 0.45f
+        tokenInput.alpha = if (enabled) 1f else 0.45f
     }
 
     private fun attachSurface(surface: Surface) {

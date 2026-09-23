@@ -12,9 +12,10 @@
 | 核对时远端 | `3ac55e34c6add69c13c90ef6d55a767391d3fbd5` |
 | 基线差异 | 远端领先 2 个提交，均只修改 `README.md` |
 | 应用包名 | `com.shilapi.xcertplay.e01` |
+| 应用版本 | `0.2.0` / versionCode `2` |
 | Android | 5.1 / API 22 |
 | APK | `e01/build/outputs/apk/debug/e01-debug.apk` |
-| APK SHA-256 | `97dc95effa502fadedd0ea0d3906f2c1e1750450f779abc5042c27ac12c760ac` |
+| APK SHA-256 | `096c333ed84b241d7ae3fe8d429c39ac386742682ce8a0ff807010160204edec` |
 
 实车已证明的边界见
 [`e01-runtime-evidence-2026-09-23.zh-CN.md`](e01-runtime-evidence-2026-09-23.zh-CN.md)：
@@ -46,6 +47,13 @@ Remote MFi service
   -> POST /mfi/reset
   -> GET  /mfi/certificate
   -> POST /mfi/sign
+
+No-MFi diagnostics
+  -> skip Remote MFi and VPN
+  -> open config 6 / NCM / USBMUX / Lockdown / carkit
+  -> complete iAP2 Identification
+  -> receive AA00
+  -> close all transports without sending AA01
 ```
 
 ## 3. 变更矩阵
@@ -60,6 +68,7 @@ Remote MFi service
 | 重枚举 | 主要依赖 attach 广播 | attach + 750 ms 轮询，20 s 超时，最多 2 次 | E01 可能漏收重枚举广播 | 降低永久卡在等待态的概率 |
 | iAP2 USB 接口号 | 固定值 | 从 config 6 的 NCM data interface 动态取得 | 避免猜测接口号 | 以实机描述符为准 |
 | MFi | 本地 CH341/I2C 或 Remote | 仅 Remote MFi | 车机端不新增硬件依赖 | Remote MFi 服务必须在线 |
+| 无 MFi 诊断 | 无 | 设置页提供持久化开关 | MFi 到位前验证前半链路 | 收到 AA00 后主动停止，不启动 CarPlay |
 | 显示 | 可配置 | H.264、1280x720、30 fps | 首轮降低解码负担 | 暂不启用 HEVC |
 | 麦克风 | 通用模块可启用 | E01 强制关闭且不申请录音权限 | 先收敛首轮风险 | Siri/电话上行本轮不验收 |
 | 持久化 | 通用应用数据 | E01 独立 SharedPreferences | 不污染现有应用 | 保存身份、AirPlay 配对、Lockdown 记录和 MFi 配置 |
@@ -73,6 +82,7 @@ Remote MFi service
 
 | 字段 | 路径 | 目标值 | 验证方式 |
 |---|---|---|---|
+| No-MFi diagnostics | E01 App 右上角齿轮 > `No-MFi diagnostics` | 无 MFi 测试时开启；正式运行时关闭 | 开启后不要求 URL、不弹 VPN，最终显示 AA00 PASS |
 | Server URL | E01 App 右上角齿轮 > `Server URL` | `http://<host>:<port>` 或兼容 Android 5.1 的 HTTPS URL，不带末尾 `/` | App 显示 `Remote MFi ready` |
 | Bearer token | E01 App 右上角齿轮 > `Bearer token` | 服务未鉴权则留空；否则填实际 token | 服务端收到 `Authorization: Bearer <token>` |
 | Reset API | `<Server URL>/mfi/reset` | `POST {}`，2xx | App 启动时服务端有一次请求 |
@@ -123,7 +133,7 @@ shasum -a 256 e01/build/outputs/apk/debug/e01-debug.apk
 
 - Gradle 返回 `BUILD SUCCESSFUL`；
 - `e01` 和 `e01shared` lint 均无 error；
-- `e01shared` 68 个协议/媒体/Remote MFi 单测全部通过；
+- `e01shared` 70 个协议/媒体/Remote MFi/NCM 单测全部通过；
 - APK manifest 为 `minSdkVersion=22`、`targetSdkVersion=22`；
 - APK 不含 `lib/` native 库；
 - APK 不声明 `RECORD_AUDIO`、蓝牙、定位或 Wi-Fi 管理权限。
@@ -151,11 +161,11 @@ adb -s <E01-IP>:5555 shell am start \
 
 首次启动：
 
-1. 在设置侧栏填入 `Server URL` 和可选 `Bearer token`。
-2. 点击 `Save and connect`。
-3. Android 出现 VPN 确认时选择允许。
-4. 连接 iPhone。
-5. Android 出现 USB 权限时允许。
+1. 无 MFi 测试时开启 `No-MFi diagnostics`；正式模式保持关闭。
+2. 正式模式填入 `Server URL` 和可选 `Bearer token`。
+3. 点击 `Save and connect`。
+4. 仅正式模式会请求 Android VPN 权限。
+5. 连接 iPhone并允许 Android USB 权限。
 6. iPhone 出现信任提示时确认并输入锁屏密码。
 7. 失败后先保存日志，不连续点击重连；确认原因后再点顶部重连按钮。
 
@@ -168,7 +178,33 @@ adb -s <E01-IP>:5555 logcat -v threadtime \
   > e01-wired-carplay.log
 ```
 
-按顺序核对：
+### 7.1 无 MFi 诊断
+
+开启 `No-MFi diagnostics` 后按顺序核对：
+
+| 阶段 | 必须看到的证据 |
+|---|---|
+| 模式 | `Remote MFi bypassed` |
+| USB | `USB 0x52 sent`、`carplay config chosen=6` |
+| NCM | `ncm NTB16 supported=true`，同时记录 `inMax`、`outMax` |
+| USBMUX | `usbmux version accepted: 2` |
+| Lockdown | 新建或加载 pair record |
+| carkit | `carkit iAP2 control channel ready` |
+| Identification | `diagnostic iap2 identification accepted` |
+| 停止点 | `diagnostic iap2 rx=0xaa00 request-certificate; stopping before AA01` |
+| 结果 | `diagnostic PASS received AA00` 和 UI `PASS: AA00 received; stopped before AA01` |
+
+额外负向检查：
+
+- [ ] Remote MFi 服务端没有收到 `/mfi/reset`、`/mfi/certificate` 或 `/mfi/sign`；
+- [ ] 日志中没有 `iap2 mfi tx=0xaa01`；
+- [ ] 没有弹出 Android VPN 授权；
+- [ ] iPhone 不启动 CarPlay 画面，这是预期结果；
+- [ ] 完成后探针仍能重新 claim USBMUX/NCM，证明接口已经释放。
+
+### 7.2 正式模式
+
+关闭 `No-MFi diagnostics` 后按顺序核对：
 
 | 阶段 | 必须看到的证据 | 失败即停 |
 |---|---|---|
@@ -192,6 +228,8 @@ adb -s <E01-IP>:5555 logcat -v threadtime \
 
 ### 8.1 冷启动
 
+- [ ] 先完成一次无 MFi 诊断并停在 AA00；
+- [ ] 关闭 `No-MFi diagnostics`；
 - [ ] 车机重启后 Remote MFi 可达；
 - [ ] App 首次启动显示并保存两个配置字段；
 - [ ] VPN 同意一次后后续启动不重复弹窗；
@@ -260,6 +298,7 @@ adb -s <E01-IP>:5555 shell pm clear com.shilapi.xcertplay.e01
 由于生成 APK 时车机已离线，本轮只完成本地编译、lint、单测和 APK 静态检查。以下结论必须等下一次实车窗口：
 
 - config 6 在当前 iPhone/固件组合上的自动重枚举稳定性；
+- 无 MFi 诊断能否稳定到达 AA00 并释放全部 USB interface；
 - `com.apple.carkit.service` 是否接受当前 identification；
 - Remote MFi/BAA 的完整 iAP2 与 AirPlay 两次鉴权；
 - NCM TUN 上的 IPv6 双向通信；

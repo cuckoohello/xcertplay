@@ -28,6 +28,7 @@ import com.shilapi.xcertplay.transport.Iap2UsbSession
 import com.shilapi.xcertplay.transport.Iap2WiredCarPlayEndpoint
 import com.shilapi.xcertplay.transport.Iap2WiredControlClient
 import com.shilapi.xcertplay.transport.Iap2WiredControlTerminal
+import com.shilapi.xcertplay.transport.Iap2WiredDiagnosticClient
 import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
 import com.shilapi.xcertplay.transport.IphoneUsbException
 import com.shilapi.xcertplay.transport.IphoneUsbHost
@@ -70,6 +71,7 @@ internal class E01WiredCarPlayController(
     private val loadPairRecord: () -> LockdownPairRecord?,
     private val savePairRecord: (LockdownPairRecord) -> Unit,
     private val clearPairRecord: () -> Unit,
+    private val noMfiDiagnostic: Boolean = false,
 ) : Closeable {
     private enum class Phase {
         IDLE,
@@ -78,6 +80,7 @@ internal class E01WiredCarPlayController(
         REENUMERATION,
         DATA_PATHS,
         CONTROL,
+        COMPLETE,
         FAILED,
         CLOSED,
     }
@@ -169,10 +172,17 @@ internal class E01WiredCarPlayController(
     }
 
     fun start() {
-        check(remoteMfi.serverUrl.isNotBlank()) { "Remote MFi server URL is required" }
+        check(noMfiDiagnostic || remoteMfi.serverUrl.isNotBlank()) {
+            "Remote MFi server URL is required"
+        }
         if (closed.get() || phase != Phase.IDLE) return
         permissionReceiver = iphoneHost.registerPermissionReceiver(::onPermissionResult)
         attachReceiver = iphoneHost.registerAttachReceiver(::onIphoneAttached)
+        if (noMfiDiagnostic) {
+            status("diagnostic", "Remote MFi bypassed")
+            startPhoneDiscovery()
+            return
+        }
         phase = Phase.MFI
         bindVpn()
         if (!vpnBound) return
@@ -485,6 +495,29 @@ internal class E01WiredCarPlayController(
             controlSession = csm
             debug("carkit iAP2 control channel ready")
 
+            val effectiveIdentification = identification.copy(
+                carPlayUsbInterfaceNumber = carPlayUsbInterfaceNumber,
+            )
+            if (noMfiDiagnostic) {
+                status("diagnostic", "Waiting for MFi request AA00")
+                val result = Iap2WiredDiagnosticClient(csm).runUntilAuthenticationRequest(
+                    identification = effectiveIdentification,
+                    timeoutMillis = DIAGNOSTIC_TIMEOUT_MILLIS,
+                    onProgress = { debug(it) },
+                )
+                debug(
+                    "diagnostic PASS received AA00 skippedFrames=${result.skippedFrames}; " +
+                        "AA01 was not sent",
+                )
+                controlSession = null
+                csm.closeQuietly()
+                mux = null
+                openedMux.closeQuietly()
+                phase = Phase.COMPLETE
+                status("diagnostic", "PASS: AA00 received; stopped before AA01")
+                return
+            }
+
             val hostMac = ncm.hostMac ?: DEFAULT_HOST_MAC
             status("network", "Attaching NCM and AirPlay")
             attachVpn(ncm, hostMac)
@@ -504,9 +537,7 @@ internal class E01WiredCarPlayController(
                 csm,
                 Iap2MfiAuthenticationClient(authenticator),
             ).run(
-                identification = identification.copy(
-                    carPlayUsbInterfaceNumber = carPlayUsbInterfaceNumber,
-                ),
+                identification = effectiveIdentification,
                 endpoint = endpoint,
                 availableCurrentMilliAmps = AVAILABLE_CURRENT_MILLIAMPS,
                 timeoutMillis = CONTROL_LOOP_TIMEOUT_MILLIS,
@@ -658,6 +689,7 @@ internal class E01WiredCarPlayController(
         const val LINK_LOCAL_ADDRESS = "fe80::2"
         const val AVAILABLE_CURRENT_MILLIAMPS = 2400
         const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
+        const val DIAGNOSTIC_TIMEOUT_MILLIS = 60_000L
         const val CONTROL_LOOP_TIMEOUT_MILLIS = 24 * 60 * 60_000L
         const val VPN_BIND_TIMEOUT_MILLIS = 10_000L
         const val DEVICE_POLL_INTERVAL_MILLIS = 2_000L

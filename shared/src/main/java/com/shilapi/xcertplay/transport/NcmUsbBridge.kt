@@ -23,6 +23,7 @@ class NcmUsbBridge internal constructor(
     private val statusEndpoint: UsbEndpoint?,
     private val claimedInterfaces: List<UsbInterface>,
     descriptorHostMac: ByteArray?,
+    val ntbParameters: NcmNtbParameters,
 ) : Closeable {
     private val descriptorMac = descriptorHostMac?.copyOf()
     val hostMac: ByteArray? get() = descriptorMac?.copyOf()
@@ -289,6 +290,17 @@ class NcmUsbBridge internal constructor(
                         "Android could not select the NCM data alternate setting",
                     )
                 }
+                val ntbParameters = readNtbParameters(connection, function.control.id)
+                Log.i(
+                    IphoneCarPlayConfiguration.TAG,
+                    "ncm NTB16 supported=${ntbParameters.supportsNtb16} " +
+                        "inMax=${ntbParameters.ntbInMaxSize} " +
+                        "outMax=${ntbParameters.ntbOutMaxSize} " +
+                        "outDatagrams=${ntbParameters.ntbOutMaxDatagrams}",
+                )
+                if (!ntbParameters.supportsNtb16) {
+                    throw IphoneUsbException.Protocol("iPhone NCM function does not support NTB16")
+                }
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
                     "ncm status endpoint=${function.statusIn?.address?.let { "0x${it.toString(16)}" } ?: "none"}",
@@ -300,6 +312,7 @@ class NcmUsbBridge internal constructor(
                     function.statusIn,
                     claimed,
                     descriptorHostMac,
+                    ntbParameters,
                 )
             } catch (error: Throwable) {
                 for (usbInterface in claimed.asReversed()) {
@@ -336,6 +349,47 @@ class NcmUsbBridge internal constructor(
             return ByteArray(6) { offset -> hex.substring(offset * 2, offset * 2 + 2).toInt(16).toByte() }
         }
 
+        private fun readNtbParameters(
+            connection: UsbDeviceConnection,
+            controlInterfaceId: Int,
+        ): NcmNtbParameters {
+            val bytes = ByteArray(NTB_PARAMETERS_BYTES)
+            val transferred = connection.controlTransfer(
+                USB_CLASS_INTERFACE_IN,
+                NCM_GET_NTB_PARAMETERS,
+                0,
+                controlInterfaceId,
+                bytes,
+                bytes.size,
+                USB_CONTROL_TIMEOUT_MILLIS,
+            )
+            if (transferred < NTB_PARAMETERS_BYTES) {
+                throw IphoneUsbException.Protocol(
+                    "NCM GET_NTB_PARAMETERS returned $transferred of $NTB_PARAMETERS_BYTES bytes",
+                )
+            }
+            return parseNtbParameters(bytes)
+        }
+
+        internal fun parseNtbParameters(bytes: ByteArray): NcmNtbParameters {
+            require(bytes.size >= NTB_PARAMETERS_BYTES) {
+                "NCM NTB parameters must contain at least $NTB_PARAMETERS_BYTES bytes"
+            }
+            return NcmNtbParameters(
+                length = readU16Le(bytes, 0),
+                formatsSupported = readU16Le(bytes, 2),
+                ntbInMaxSize = readU32Le(bytes, 4),
+                ndpInDivisor = readU16Le(bytes, 8),
+                ndpInPayloadRemainder = readU16Le(bytes, 10),
+                ndpInAlignment = readU16Le(bytes, 12),
+                ntbOutMaxSize = readU32Le(bytes, 16),
+                ndpOutDivisor = readU16Le(bytes, 20),
+                ndpOutPayloadRemainder = readU16Le(bytes, 22),
+                ndpOutAlignment = readU16Le(bytes, 24),
+                ntbOutMaxDatagrams = readU16Le(bytes, 26),
+            )
+        }
+
         private fun ethernetMacStringIndex(raw: ByteArray, controlInterfaceId: Int): Int? {
             var offset = 0
             var currentInterface = -1
@@ -361,12 +415,44 @@ class NcmUsbBridge internal constructor(
         private fun ByteArray.macString(): String =
             joinToString(":") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
+        private fun readU16Le(source: ByteArray, offset: Int): Int =
+            (source[offset].toInt() and 0xff) or
+                ((source[offset + 1].toInt() and 0xff) shl 8)
+
+        private fun readU32Le(source: ByteArray, offset: Int): Long =
+            (source[offset].toLong() and 0xff) or
+                ((source[offset + 1].toLong() and 0xff) shl 8) or
+                ((source[offset + 2].toLong() and 0xff) shl 16) or
+                ((source[offset + 3].toLong() and 0xff) shl 24)
+
         private const val USB_INTERFACE_DESCRIPTOR_TYPE = 0x04
         private const val USB_REQUEST_GET_DESCRIPTOR = 0x06
         private const val USB_STRING_DESCRIPTOR_TYPE = 0x03
         private const val CDC_FUNCTIONAL_DESCRIPTOR_TYPE = 0x24
         private const val CDC_ETHERNET_SUBTYPE = 0x0f
+        private const val USB_RECIPIENT_INTERFACE = 0x01
+        private const val USB_CLASS_INTERFACE_IN =
+            UsbConstants.USB_DIR_IN or UsbConstants.USB_TYPE_CLASS or USB_RECIPIENT_INTERFACE
+        private const val NCM_GET_NTB_PARAMETERS = 0x80
+        private const val NTB_PARAMETERS_BYTES = 28
         private const val USB_ENGLISH_US = 0x0409
         private const val USB_CONTROL_TIMEOUT_MILLIS = 1_000
     }
+}
+
+data class NcmNtbParameters(
+    val length: Int,
+    val formatsSupported: Int,
+    val ntbInMaxSize: Long,
+    val ndpInDivisor: Int,
+    val ndpInPayloadRemainder: Int,
+    val ndpInAlignment: Int,
+    val ntbOutMaxSize: Long,
+    val ndpOutDivisor: Int,
+    val ndpOutPayloadRemainder: Int,
+    val ndpOutAlignment: Int,
+    val ntbOutMaxDatagrams: Int,
+) {
+    val supportsNtb16: Boolean
+        get() = formatsSupported and 0x0001 != 0
 }

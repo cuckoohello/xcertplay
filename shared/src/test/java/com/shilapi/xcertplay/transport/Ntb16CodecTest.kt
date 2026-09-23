@@ -29,4 +29,35 @@ class Ntb16CodecTest {
     fun datagramThatWouldOverflowBlockLengthIsRejected() {
         Ntb16Codec.build(ByteArray(65_508), 0x1234)
     }
+
+    @Test
+    fun parsesCdcNcmNtbParametersAsLittleEndian() {
+        val bytes = byteArrayOf(
+            0x1c, 0x00,
+            0x01, 0x00,
+            0x00, 0x80.toByte(), 0x00, 0x00,
+            0x04, 0x00,
+            0x00, 0x00,
+            0x04, 0x00,
+            0x00, 0x00,
+            0x00, 0x40, 0x00, 0x00,
+            0x04, 0x00,
+            0x00, 0x00,
+            0x04, 0x00,
+            0x10, 0x00,
+        )
+
+        val parameters = NcmUsbBridge.parseNtbParameters(bytes)
+
+        assertEquals(28, parameters.length)
+        assertEquals(true, parameters.supportsNtb16)
+        assertEquals(32_768L, parameters.ntbInMaxSize)
+        assertEquals(16_384L, parameters.ntbOutMaxSize)
+        assertEquals(16, parameters.ntbOutMaxDatagrams)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsShortCdcNcmNtbParameters() {
+        NcmUsbBridge.parseNtbParameters(ByteArray(27))
+    }
 }
