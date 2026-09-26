@@ -15,7 +15,7 @@ E01 有线 CarPlay 的构建、安装、逐阶段判据与验收。执行前先�
 | 应用版本 | `0.2.0` / versionCode `2` |
 | Android | 5.1 / API 22 |
 | APK | `e01/build/outputs/apk/debug/e01-debug.apk` |
-| APK SHA-256（本轮 iAP2 阶段化超时构建） | `17791f0fbf8e37354916c0a73ef96fba57cfea0779606a94c5e99cc62028371a` |
+| APK SHA-256（本轮 Lockdown 稳定性构建） | `fddff78a79f30f51353836dfedf293e1348087369f73400fb238c9e802a4f63c` |
 
 实车已证明的边界见
 [`evidence/e01-runtime-2026-09-23.md`](evidence/e01-runtime-2026-09-23.md)：
@@ -77,6 +77,8 @@ No-MFi diagnostics
 | 磁盘日志 | 无 | 双文件 rotate，`noBackupFilesDir/logs/e01.log` + `e01.log.1`，各 512 KiB，总 ≤ 1 MiB | 便于跨会话回溯 iAP2/AirPlay 事件 | 首次启动即建立；退出/清理不影响 APK |
 | iAP2 控制超时 | 单一 `deadlineNanos: Long` 到期即失败 | `Iap2ControlDeadline`：握手前 60 s，`authenticated()` 后转 30 s 轮询；支持 `NO_TIMEOUT_MILLIS = Long.MAX_VALUE` | 迁自 DiPlay，避免长驾驶被固定 timeout 打断，同时保留握手上限 | `Iap2WiredControlClient` 与调用侧行为等价，E01 现有 24 h timeout 依然合法 |
 | iAP2 identification 声明 | AA 消息未列入 `MESSAGES_SENT_BY_ACCESSORY` / `MESSAGES_RECEIVED_FROM_PHONE` | 追加 `0xAA00..0xAA05` | Local MFi 在 identification 后立刻进入 AA 循环，须在声明列表内 | `Iap2MfiAuthenticationClient` 帧不再被 identification 丢弃 |
+| Lockdown carkit 服务打开 | `open(pairRecord, label)` 内联写死 `com.apple.carkit.service` | 抽出 `openService(pairRecord, label, serviceName)`，`open` 转为 wrapper | 迁自 DiPlay：为未来打开其他 Lockdown 服务（如 mobileactivationd 之类）留口；行为完全等价 | 现有 `open(...)` 调用签名不变 |
+| Lockdown TLS 端点校验 | `SSLEngine` 默认可能开启 endpoint identification | `sslParameters.endpointIdentificationAlgorithm = null` | Lockdown 是 P2P TLS 无 SNI，默认端点校验会导致 P+ Android 拒绝连接 | E01 API 22 上 `SSLParameters` 及此 setter 均可用（已核 `javap`） |
 
 ## 4. 人工配置单
 

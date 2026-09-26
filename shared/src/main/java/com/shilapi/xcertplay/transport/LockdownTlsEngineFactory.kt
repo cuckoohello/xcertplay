@@ -48,6 +48,7 @@ object LockdownTlsEngineFactory {
             }
             return context.createSSLEngine(PEER_HOST, PEER_PORT).apply {
                 useClientMode = true
+                sslParameters = sslParameters.apply { endpointIdentificationAlgorithm = null }
             }
         } finally {
             password.fill('\u0000')

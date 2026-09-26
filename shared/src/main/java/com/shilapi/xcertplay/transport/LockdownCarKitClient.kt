@@ -19,8 +19,12 @@ class LockdownCarKitClient(
         open(pairedRecord.pairRecord, label)
 
     @Throws(IphoneUsbException::class, GeneralSecurityException::class)
-    fun open(pairRecord: LockdownPairRecord, label: String): BlockingDuplexByteStream {
+    fun open(pairRecord: LockdownPairRecord, label: String): BlockingDuplexByteStream =
+        openService(pairRecord, label, CARKIT_SERVICE)
+
+    fun openService(pairRecord: LockdownPairRecord, label: String, serviceName: String): BlockingDuplexByteStream {
         require(label.isNotBlank()) { "label must not be blank" }
+        require(serviceName.isNotBlank()) { "serviceName must not be blank" }
 
         val lockdownConnection = host.connect(
             destinationPort = Iap2UsbMuxHost.LOCKDOWN_PORT,
@@ -58,7 +62,7 @@ class LockdownCarKitClient(
                 LockdownPlistValue.Dictionary(
                     linkedMapOf(
                         "Request" to LockdownPlistValue.Text("StartService"),
-                        "Service" to LockdownPlistValue.Text(CARKIT_SERVICE),
+                        "Service" to LockdownPlistValue.Text(serviceName),
                     ),
                 ),
                 STEP_TIMEOUT_MILLIS,
