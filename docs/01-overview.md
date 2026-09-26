@@ -11,7 +11,7 @@
 | 项目 | 值 |
 |---|---|
 | 定位 | Android 车机端 CarPlay 接收器（有线 + 无线） |
-| MFi 认证 | 支持 CH341/I2C 本地 MFi，或 Remote MFi/BAA HTTP 服务 |
+| MFi 认证 | 支持 CH341/I2C 本地 MFi、Local offline（仅内部验收）、或 Remote MFi/BAA HTTP 服务 |
 | 目标车机 | 几何 C E01（Android 5.1 / API 22），并保留 API 28+ 通用车机 |
 | 分支 | 主线 `master`（API 28+），E01 分支 `e01-wired-carplay`（API 22） |
 | 构建入口 | Gradle 8+，Android Gradle Plugin 9.3.0，Kotlin 2.2.10 |
@@ -198,10 +198,10 @@ api17probe/src/main/java/com/shilapi/xcertplay/api17probe/
   - 目标：Lockdown 结束后 iPhone 自动回落 config 1 时的重回策略；
   - 依赖：实车窗口；
   - 验收：`03-wired-carplay.md §8.3`。
-- **T-D2**：Remote MFi/BAA 完整鉴权
-  - 目标：`RemoteMfiAuthenticationClient` 现网可用性；
-  - 依赖：Remote MFi 服务；
-  - 验收：`03-wired-carplay.md §7.2`。
+- **T-D2**：MFi 完整鉴权（Local 优先，Remote 回退）
+  - 目标：优先验收 `LocalMfiAuthenticationClient`（内部专用，凭据来自 DiPlay.apk）在 E01 上的 iAP2 / AirPlay MFi-SAP；`RemoteMfiAuthenticationClient` 保留为可选回退；
+  - 依赖：`assets/offline-mfi/*` 已按 [03-wired-carplay.md §Local MFi](03-wired-carplay.md#local-mfi) 部署，或 Remote MFi 服务在线；
+  - 验收：`03-wired-carplay.md §Local MFi §验收` 与 §7.2。
 - **T-D3**：H.264 / 音频 / 触控端到端
   - 目标：`AndroidMediaSink`、`CarPlayTouchMapper`、`AudioStream` 在 E01 上实车验证；
   - 依赖：T-D2；

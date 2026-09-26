@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import com.shilapi.xcertplay.airplay.AirPlayIdentity
 import com.shilapi.xcertplay.airplay.PairingStore
+import com.shilapi.xcertplay.mfi.MfiTarget
 import com.shilapi.xcertplay.transport.LockdownPairRecord
 import com.shilapi.xcertplay.util.Base64Compat
 
@@ -15,6 +16,7 @@ internal data class RemoteMfiSettings(
 @SuppressLint("ApplySharedPref")
 internal object E01Persistence {
     private const val PREFS = "e01_wired_carplay"
+    private const val KEY_MFI_TARGET = "mfi_target"
     private const val KEY_REMOTE_SERVER = "remote_mfi_server"
     private const val KEY_REMOTE_TOKEN = "remote_mfi_token"
     private const val KEY_NO_MFI_DIAGNOSTIC = "no_mfi_diagnostic"
@@ -39,6 +41,19 @@ internal object E01Persistence {
             serverUrl = prefs.getString(KEY_REMOTE_SERVER, null).orEmpty(),
             bearerToken = prefs.getString(KEY_REMOTE_TOKEN, null).orEmpty(),
         )
+    }
+
+    fun loadMfiTarget(context: Context): MfiTarget {
+        val stored = prefs(context).getString(KEY_MFI_TARGET, null) ?: return MfiTarget.LOCAL
+        return try {
+            MfiTarget.valueOf(stored)
+        } catch (_: IllegalArgumentException) {
+            MfiTarget.LOCAL
+        }
+    }
+
+    fun saveMfiTarget(context: Context, target: MfiTarget) {
+        prefs(context).edit().putString(KEY_MFI_TARGET, target.name).apply()
     }
 
     fun saveRemoteMfi(context: Context, settings: RemoteMfiSettings) {

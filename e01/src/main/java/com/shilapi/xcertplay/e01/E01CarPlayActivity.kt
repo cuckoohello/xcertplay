@@ -38,6 +38,7 @@ import com.shilapi.xcertplay.airplay.CarPlayMediaEngine
 import com.shilapi.xcertplay.media.AndroidMediaSink
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.network.CarPlayVpnService
+import com.shilapi.xcertplay.mfi.MfiTarget
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
 import java.net.URL
 import java.util.ArrayDeque
@@ -54,6 +55,7 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var logView: TextView
     private lateinit var settingsOverlay: View
     private lateinit var diagnosticSwitch: Switch
+    private lateinit var localMfiSwitch: Switch
     private lateinit var serverInput: EditText
     private lateinit var tokenInput: EditText
 
@@ -67,17 +69,32 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val bootstrapError = runCatching { E01Bootstrap.ensure(this) }.exceptionOrNull()
         identity = E01Persistence.loadIdentity(this)
         setContentView(buildContentView())
         applyFullscreen()
 
         val settings = E01Persistence.loadRemoteMfi(this)
+        val target = E01Persistence.loadMfiTarget(this)
         serverInput.setText(settings.serverUrl)
         tokenInput.setText(settings.bearerToken)
         diagnosticSwitch.isChecked = E01Persistence.loadNoMfiDiagnostic(this)
+        localMfiSwitch.isChecked = target == MfiTarget.LOCAL
         updateMfiInputsEnabled()
         appendLog("E01 wired host ready")
-        if (!diagnosticSwitch.isChecked && settings.serverUrl.isBlank()) {
+        if (bootstrapError != null) {
+            appendLog("Local MFi identity unavailable: ${bootstrapError.message ?: bootstrapError.javaClass.simpleName}")
+            if (localMfiSwitch.isChecked) {
+                showSettings(true)
+                updateStatus(
+                    "config",
+                    "Local MFi identity is missing",
+                    failed = true,
+                )
+                return
+            }
+        }
+        if (!diagnosticSwitch.isChecked && !localMfiSwitch.isChecked && settings.serverUrl.isBlank()) {
             showSettings(true)
             updateStatus("config", "Remote MFi server is required", failed = true)
         } else {
@@ -313,6 +330,20 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
                 dp(52),
             ),
         )
+        localMfiSwitch = Switch(this).apply {
+            text = "Use local offline MFi identity"
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            setPadding(0, dp(4), 0, dp(8))
+            setOnCheckedChangeListener { _, _ -> updateMfiInputsEnabled() }
+        }
+        panel.addView(
+            localMfiSwitch,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52),
+            ),
+        )
 
         panel.addView(sectionLabel("REMOTE MFI"))
         panel.addView(fieldLabel("Server URL"))
@@ -377,7 +408,8 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         val server = serverInput.text.toString().trim().trimEnd('/')
         val token = tokenInput.text.toString()
         val diagnosticMode = diagnosticSwitch.isChecked
-        if (!diagnosticMode) {
+        val useLocalMfi = localMfiSwitch.isChecked
+        if (!diagnosticMode && !useLocalMfi) {
             val validationError = validateServer(server)
             if (validationError != null) {
                 serverInput.error = validationError
@@ -386,7 +418,17 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         }
         E01Persistence.saveRemoteMfi(this, RemoteMfiSettings(server, token))
         E01Persistence.saveNoMfiDiagnostic(this, diagnosticMode)
-        appendLog(if (diagnosticMode) "No-MFi diagnostic mode enabled" else "Remote MFi settings saved")
+        E01Persistence.saveMfiTarget(
+            this,
+            if (useLocalMfi) MfiTarget.LOCAL else MfiTarget.REMOTE,
+        )
+        appendLog(
+            when {
+                diagnosticMode -> "No-MFi diagnostic mode enabled"
+                useLocalMfi -> "Local offline MFi enabled"
+                else -> "Remote MFi settings saved"
+            },
+        )
         showSettings(false)
         ensureVpnAndStart()
     }
@@ -425,7 +467,8 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     private fun ensureVpnAndStart() {
         val settings = E01Persistence.loadRemoteMfi(this)
         val diagnosticMode = E01Persistence.loadNoMfiDiagnostic(this)
-        if (!diagnosticMode && settings.serverUrl.isBlank()) {
+        val target = E01Persistence.loadMfiTarget(this)
+        if (!diagnosticMode && target == MfiTarget.REMOTE && settings.serverUrl.isBlank()) {
             showSettings(true)
             updateStatus("config", "Remote MFi server is required", failed = true)
             return
@@ -448,7 +491,8 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     private fun restartController() {
         val settings = E01Persistence.loadRemoteMfi(this)
         val diagnosticMode = E01Persistence.loadNoMfiDiagnostic(this)
-        if (!diagnosticMode && settings.serverUrl.isBlank()) {
+        val target = E01Persistence.loadMfiTarget(this)
+        if (!diagnosticMode && target == MfiTarget.REMOTE && settings.serverUrl.isBlank()) {
             showSettings(true)
             updateStatus("config", "Remote MFi server is required", failed = true)
             return
@@ -466,7 +510,7 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         mainHandler.postDelayed(
             {
                 if (generation == restartGeneration && !isFinishing) {
-                    startController(settings, diagnosticMode, generation)
+                    startController(settings, diagnosticMode, target, generation)
                 }
             },
             if (oldController == null) 0L else RESTART_DELAY_MILLIS,
@@ -476,6 +520,7 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     private fun startController(
         settings: RemoteMfiSettings,
         diagnosticMode: Boolean,
+        target: MfiTarget,
         generation: Int,
     ) {
         val sink = AndroidMediaSink(
@@ -498,6 +543,7 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         )
         val next = E01WiredCarPlayController(
             context = this,
+            mfiTarget = target,
             remoteMfi = settings,
             airPlayConfig = createAirPlayConfig(),
             identity = identity,
@@ -604,12 +650,21 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun updateMfiInputsEnabled() {
-        if (!::serverInput.isInitialized || !::tokenInput.isInitialized) return
-        val enabled = !diagnosticSwitch.isChecked
-        serverInput.isEnabled = enabled
-        tokenInput.isEnabled = enabled
-        serverInput.alpha = if (enabled) 1f else 0.45f
-        tokenInput.alpha = if (enabled) 1f else 0.45f
+        if (
+            !::serverInput.isInitialized ||
+            !::tokenInput.isInitialized ||
+            !::diagnosticSwitch.isInitialized ||
+            !::localMfiSwitch.isInitialized
+        ) {
+            return
+        }
+        val diagnostic = diagnosticSwitch.isChecked
+        val local = localMfiSwitch.isChecked
+        val remoteEnabled = !diagnostic && !local
+        serverInput.isEnabled = remoteEnabled
+        tokenInput.isEnabled = remoteEnabled
+        serverInput.alpha = if (remoteEnabled) 1f else 0.45f
+        tokenInput.alpha = if (remoteEnabled) 1f else 0.45f
     }
 
     private fun attachSurface(surface: Surface) {

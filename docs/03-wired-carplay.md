@@ -9,15 +9,13 @@ E01 有线 CarPlay 的构建、安装、逐阶段判据与验收。执行前先�
 | 项目 | 值 |
 |---|---|
 | 仓库 | `https://github.com/shilapi/xcertplay.git` |
-| 本地分支 | `master` |
-| 适配基线 | `a5de8fdd06c7782981c1059a5246d80a8fe1c984` |
-| 核对时远端 | `3ac55e34c6add69c13c90ef6d55a767391d3fbd5` |
-| 基线差异 | 远端领先 2 个提交，均只修改 `README.md` |
+| 本地分支 | `e01-wired-carplay` |
+| 适配基线 | `793c21f`（含本轮 Local MFi 改动前） |
 | 应用包名 | `com.shilapi.xcertplay.e01` |
 | 应用版本 | `0.2.0` / versionCode `2` |
 | Android | 5.1 / API 22 |
 | APK | `e01/build/outputs/apk/debug/e01-debug.apk` |
-| APK SHA-256 | `096c333ed84b241d7ae3fe8d429c39ac386742682ce8a0ff807010160204edec` |
+| APK SHA-256（本轮 Local MFi 构建） | `15f73c46366de733df02357187e942426097cefab336e09727d51b9ae5a3c6e0` |
 
 实车已证明的边界见
 [`evidence/e01-runtime-2026-09-23.md`](evidence/e01-runtime-2026-09-23.md)：
@@ -69,7 +67,7 @@ No-MFi diagnostics
 | USB 配置 | 通用描述符匹配允许回退 | E01 严格要求 configuration ID `6` | 防止误选 config 5 | config 6 不完整时明确失败 |
 | 重枚举 | 主要依赖 attach 广播 | attach + 750 ms 轮询，20 s 超时，最多 2 次 | E01 可能漏收重枚举广播 | 降低永久卡在等待态的概率 |
 | iAP2 USB 接口号 | 固定值 | 从 config 6 的 NCM data interface 动态取得 | 避免猜测接口号 | 以实机描述符为准 |
-| MFi | 本地 CH341/I2C 或 Remote | 仅 Remote MFi | 车机端不新增硬件依赖 | Remote MFi 服务必须在线 |
+| MFi | 本地 CH341/I2C 或 Remote | Local offline 或 Remote MFi | 无 CH341/I2C 硬件时也可完成 iAP2/AirPlay MFi | 参见 §Local MFi |
 | 无 MFi 诊断 | 无 | 设置页提供持久化开关 | MFi 到位前验证前半链路 | 收到 AA00 后主动停止，不启动 CarPlay |
 | 显示 | 可配置 | H.264、1280x720、30 fps | 首轮降低解码负担 | 暂不启用 HEVC |
 | 麦克风 | 通用模块可启用 | E01 强制关闭且不申请录音权限 | 先收敛首轮风险 | Siri/电话上行本轮不验收 |
@@ -316,3 +314,62 @@ adb -s <E01-IP>:5555 shell pm clear com.shilapi.xcertplay.e01
 - E01 必须锁定 config 6，不能采用通用配置回退，否则可能误选 config 5。
 - 重枚举不能只依赖广播；E01 同时按描述符轮询，并限制总超时与重试次数。
 - 物理屏幕尺寸没有实测依据，因此未写入 AirPlay 配置；只保留明确要求的 1280x720@30。
+
+## Local MFi
+
+Local MFi 使用 APK 内置附件私钥 + Apple 附件证书直接在 Android 进程内完成 iAP2 0xAA00–0xAA05 与 AirPlay MFi-SAP 的 P-256 签名。**仅供内部验收**：私钥进入 APK 后失去硬件不可导出保护，任何拿到 APK 的人都能提取同一私钥，并与所有装机实例共享同一附件身份。上生产或对外分发前必须回到 Remote MFi 或真硬件路径。
+
+### 凭据来源
+
+- 分析基线：[`/Users/bytedance/Projects/remote-mfi-for-xcertplay/docs/04-diplay-mfi-analysis.md`](file:///Users/bytedance/Projects/remote-mfi-for-xcertplay/docs/04-diplay-mfi-analysis.md)
+- 只读来源：`DiPlay.apk`（SHA-256 `89466e01…820e`）
+- `identity.pk8` SHA-256：`bd50eda2d8dd95a8464440f1aebca7068dcab46a2461ecaf826c7f98f5621a75`
+- `certificate.p7b` SHA-256：`634a93dd6c4338080524025411752597ecb828591839cd062a8292fd7e9e844e`
+- 证书信息：`serial=24ACBB48…60D2`、`Issuer=Apple Accessories Certification Authority - 00000002`、EC P-256、有效期 `2018-06-13 .. 2049-12-31`。
+
+上述哈希在本轮构建前经 `unzip -p ... | shasum -a 256` 独立核验，与 APK 内实际字节一致。
+
+### 部署步骤（每台构建机独立执行，不入 git）
+
+```bash
+mkdir -p e01/src/main/assets/offline-mfi
+unzip -p /path/to/DiPlay.apk assets/offline-mfi/identity.pk8    > e01/src/main/assets/offline-mfi/identity.pk8
+unzip -p /path/to/DiPlay.apk assets/offline-mfi/certificate.p7b > e01/src/main/assets/offline-mfi/certificate.p7b
+shasum -a 256 e01/src/main/assets/offline-mfi/*  # 必须与上表哈希完全一致
+./gradlew :e01:assembleDebug -Pxcertplay.skipNative=true
+```
+
+`.gitignore` 中已存在 `**/assets/offline-mfi/`。`git status` 不能显示这两个文件；若显示，立即回退。
+
+### 运行时行为
+
+- `E01Bootstrap.ensure()` 在 `E01CarPlayActivity.onCreate` 中优先调用：将 `assets/offline-mfi/*` 复制到 `getNoBackupFilesDir()/offline-mfi-staging/`，`LocalMfiAuthenticationClient.load()` 自检通过后原子重命名为 `offline-mfi/`，然后再次加载。任何失败都清理 staging 并抛出，UI 显示"Local MFi identity is missing"，禁止进入 CarPlay。
+- APK 升级不会覆盖已落盘的 `offline-mfi/`；轮换凭据需要 `pm clear` 或卸载重装。
+- 设置页新增开关 "Use local offline MFi identity"：打开则 `MfiTarget.LOCAL`，关闭且未开诊断模式则 `MfiTarget.REMOTE`。诊断模式独立，一旦开启无 MFi 判别流程仍绕过。
+- `E01WiredCarPlayController.prepareLocalMfi()` 走 `LocalMfiAuthenticationClient`；`Iap2WiredControlClient` 与 `MfiSapAuthSetup` 直接使用同一 `MfiAuthenticator` 接口。
+- 每次签名日志格式：`local MFi signature digestBytes=32`；启动日志：`local offline MFi ready protocolMajor=3 certificateBytes=<n>`。
+
+### 失败模式
+
+| 现象 | 处理 |
+|---|---|
+| `Offline MFi directory is missing or invalid` | assets 未落盘；确认构建前完成 §部署步骤 |
+| `Expected one accessory certificate` | `certificate.p7b` 内证书数 ≠ 1；哈希不符则重取 |
+| `Expected a P-256 accessory certificate` | 曲线不是 secp256r1；哈希不符则重取 |
+| `Local private key does not match certificate` | 私钥与证书不匹配；同时更新两个文件 |
+| iPhone 未回 `0xAA05` | 内置凭据被 iOS 拒绝；改走 Remote MFi 或换设备 |
+
+### 回滚
+
+- **本轮切换回 Remote**：设置页关闭 "Use local offline MFi identity"、填入 Remote server；然后 `adb shell su -c 'rm -rf /data/data/com.shilapi.xcertplay.e01/no_backup/offline-mfi'`，重启 App。
+- **完全移除**：`adb uninstall com.shilapi.xcertplay.e01`；从工作区删除 `e01/src/main/assets/offline-mfi/`；确认 `git status` 无凭据文件。
+- **代码回滚**：本轮改动集中在 [`e01/src/main/java/com/shilapi/xcertplay/e01/`](../e01/src/main/java/com/shilapi/xcertplay/e01/)、[`shared/src/main/java/com/shilapi/xcertplay/mfi/`](../shared/src/main/java/com/shilapi/xcertplay/mfi/) 和 [`shared/src/main/java/com/shilapi/xcertplay/orchestration/CarPlayController.kt`](../shared/src/main/java/com/shilapi/xcertplay/orchestration/CarPlayController.kt)；`git checkout HEAD^ -- <路径>` 可退回。
+
+### 验收
+
+- `./gradlew :shared:testDebugUnitTest -Pxcertplay.skipNative=true` 全绿（含 4 项 `LocalMfiAuthenticationClientTest`）；
+- `./gradlew :e01shared:testDebugUnitTest -Pxcertplay.skipNative=true` 全绿；
+- `./gradlew :e01:assembleDebug -Pxcertplay.skipNative=true` 成功，APK SHA-256 与 §1 记录一致；
+- `unzip -l e01/build/outputs/apk/debug/e01-debug.apk | rg offline-mfi` 显示 `identity.pk8` 与 `certificate.p7b` 且哈希与本节 §凭据来源一致；
+- 实车运行时 logcat 首次启动含 `E01Bootstrap` 与 `local offline MFi ready protocolMajor=3 certificateBytes=<n>`，iPhone 返回 `0xAA05 AuthenticationSucceeded`。
+

@@ -28,7 +28,9 @@ import com.shilapi.xcertplay.airplay.AirPlaySessionListener
 import com.shilapi.xcertplay.airplay.PairingStore
 import com.shilapi.xcertplay.iap2.session.Iap2Session
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
+import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.MfiAuthenticationClient
+import com.shilapi.xcertplay.mfi.MfiTarget
 import com.shilapi.xcertplay.mfi.RemoteMfiAuthenticationClient
 import com.shilapi.xcertplay.network.CarPlayBonjour
 import com.shilapi.xcertplay.network.CarPlayVpnService
@@ -397,7 +399,13 @@ class CarPlayController(
         availabilityPollGeneration.incrementAndGet()
         phase = Phase.MFI
         onStatus(CarPlayStatus.DiscoveringMfi)
+        val offlineDirectory = java.io.File(appContext.noBackupFilesDir, LocalMfiAuthenticationClient.DIRECTORY)
+        if (offlineDirectory.exists()) {
+            openLocalMfi(offlineDirectory)
+            return
+        }
         when (config.mfiTarget) {
+            MfiTarget.LOCAL -> openLocalMfi(offlineDirectory)
             MfiTarget.USB_CH341 -> {
                 debugLog("mfi discovery backend=CH341 devices=${config.ch341Devices}")
                 val host = ch341Host ?: Ch341UsbHost(
@@ -417,6 +425,29 @@ class CarPlayController(
             MfiTarget.REMOTE -> {
                 debugLog("mfi discovery backend=Remote server=${config.remoteMfiServer.orEmpty()}")
                 openRemoteMfi()
+            }
+        }
+    }
+
+    private fun openLocalMfi(directory: java.io.File) {
+        debugLog("mfi discovery backend=LocalOffline remoteFallback=disabled")
+        executor.execute {
+            try {
+                val signatures = AtomicInteger(0)
+                val client = LocalMfiAuthenticationClient.load(directory) { size ->
+                    debugLog("mfi local signature count=${signatures.incrementAndGet()} digestBytes=$size")
+                }
+                if (closed || phase != Phase.MFI) return@execute
+                mfiSession = MfiSession(client, null)
+                debugLog(
+                    "mfi local offline ready protocolMajor=${client.protocolMajor()} " +
+                        "certificateBytes=${client.readCertificate().size}",
+                )
+                onStatus(CarPlayStatus.MfiReady)
+                startPhone()
+            } catch (error: Throwable) {
+                // A broken local identity must fail closed rather than silently use the helper.
+                fail(error)
             }
         }
     }
@@ -674,6 +705,7 @@ class CarPlayController(
                 MfiTarget.USB_CH341 -> ch341Host?.let(::checkCh341Mfi)
                 MfiTarget.I2C -> openLinuxMfi()
                 MfiTarget.REMOTE -> Unit
+                MfiTarget.LOCAL -> Unit
             }
         }
     }

@@ -20,6 +20,9 @@ import com.shilapi.xcertplay.airplay.AirPlaySessionListener
 import com.shilapi.xcertplay.airplay.PairingStore
 import com.shilapi.xcertplay.iap2.session.Iap2Session
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
+import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
+import com.shilapi.xcertplay.mfi.MfiAuthenticator
+import com.shilapi.xcertplay.mfi.MfiTarget
 import com.shilapi.xcertplay.mfi.RemoteMfiAuthenticationClient
 import com.shilapi.xcertplay.network.CarPlayVpnService
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
@@ -55,11 +58,13 @@ internal data class E01ConnectionStatus(
 )
 
 /**
- * E01-only wired pipeline. It intentionally has no Bluetooth, hotspot, local MFi, or location
- * branches so every API in this controller is valid on Android 5.1.
+ * E01-only wired pipeline. It intentionally has no Bluetooth, hotspot or location branches so
+ * every API in this controller is valid on Android 5.1. MFi is provided by either the offline
+ * [LocalMfiAuthenticationClient] or a [RemoteMfiAuthenticationClient].
  */
 internal class E01WiredCarPlayController(
     context: Context,
+    private val mfiTarget: MfiTarget,
     private val remoteMfi: RemoteMfiSettings,
     private val airPlayConfig: AirPlayConfig,
     private val identity: AirPlayIdentity,
@@ -102,7 +107,7 @@ internal class E01WiredCarPlayController(
     private val systemBuid = UUID.randomUUID().toString().uppercase(Locale.US)
 
     @Volatile private var phase = Phase.IDLE
-    @Volatile private var mfi: RemoteMfiAuthenticationClient? = null
+    @Volatile private var mfi: MfiAuthenticator? = null
     @Volatile private var mux: Iap2UsbMuxHost? = null
     @Volatile private var controlSession: Iap2Session? = null
     @Volatile private var activeAirPlaySession: AirPlaySession? = null
@@ -172,7 +177,7 @@ internal class E01WiredCarPlayController(
     }
 
     fun start() {
-        check(noMfiDiagnostic || remoteMfi.serverUrl.isNotBlank()) {
+        check(noMfiDiagnostic || mfiTarget == MfiTarget.LOCAL || remoteMfi.serverUrl.isNotBlank()) {
             "Remote MFi server URL is required"
         }
         if (closed.get() || phase != Phase.IDLE) return
@@ -186,8 +191,23 @@ internal class E01WiredCarPlayController(
         phase = Phase.MFI
         bindVpn()
         if (!vpnBound) return
-        status("mfi", "Checking Remote MFi")
-        worker.execute(::prepareMfi)
+        when (mfiTarget) {
+            MfiTarget.LOCAL -> {
+                status("mfi", "Loading local MFi identity")
+                worker.execute(::prepareLocalMfi)
+            }
+            MfiTarget.REMOTE -> {
+                status("mfi", "Checking Remote MFi")
+                worker.execute(::prepareRemoteMfi)
+            }
+            MfiTarget.USB_CH341,
+            MfiTarget.I2C -> {
+                fail(
+                    "mfi",
+                    IllegalStateException("E01 build does not support ${mfiTarget.name} MFi target"),
+                )
+            }
+        }
     }
 
     fun sendTouch(contacts: List<AirPlayContact>): Boolean {
@@ -227,7 +247,29 @@ internal class E01WiredCarPlayController(
         }
     }
 
-    private fun prepareMfi() {
+    private fun prepareLocalMfi() {
+        try {
+            val directory = java.io.File(
+                appContext.noBackupFilesDir,
+                LocalMfiAuthenticationClient.DIRECTORY,
+            )
+            val client = LocalMfiAuthenticationClient.load(directory) { size ->
+                debug("local MFi signature digestBytes=$size")
+            }
+            if (closed.get() || phase != Phase.MFI) return
+            mfi = client
+            debug(
+                "local offline MFi ready protocolMajor=${client.protocolMajor()} " +
+                    "certificateBytes=${client.readCertificate().size}",
+            )
+            status("mfi", "Local MFi ready")
+            startPhoneDiscovery()
+        } catch (error: Throwable) {
+            fail("mfi", error)
+        }
+    }
+
+    private fun prepareRemoteMfi() {
         try {
             val client = RemoteMfiAuthenticationClient(
                 serverAddress = remoteMfi.serverUrl,
@@ -524,7 +566,7 @@ internal class E01WiredCarPlayController(
             ncmOwnedLocally = false
 
             val authenticator = mfi
-                ?: throw IOException("Remote MFi client is unavailable")
+                ?: throw IOException("MFi authenticator is unavailable")
             val endpoint = Iap2WiredCarPlayEndpoint(
                 ipv6Addresses = listOf(LINK_LOCAL_ADDRESS),
                 airPlayPort = airPlayConfig.port,
@@ -576,7 +618,7 @@ internal class E01WiredCarPlayController(
         val service = awaitVpnService()
             ?: throw IOException("Could not bind CarPlay VPN service")
         val authenticator = mfi
-            ?: throw IOException("Remote MFi client is unavailable")
+            ?: throw IOException("MFi authenticator is unavailable")
         when (
             val result = service.attach(
                 ncm = ncm,

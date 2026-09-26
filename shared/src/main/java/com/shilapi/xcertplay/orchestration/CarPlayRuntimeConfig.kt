@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.orchestration
 
+import com.shilapi.xcertplay.mfi.MfiTarget
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
 import com.shilapi.xcertplay.transport.UsbDeviceId
 import java.net.Inet6Address
@@ -8,12 +9,6 @@ import java.net.InetAddress
 enum class CarPlayTransport {
     WIRED,
     WIRELESS,
-}
-
-enum class MfiTarget {
-    USB_CH341,
-    I2C,
-    REMOTE,
 }
 
 enum class WirelessHotspotMode {

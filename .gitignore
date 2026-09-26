@@ -22,3 +22,6 @@ captures/
 Thumbs.db
 *.log
 /.idea
+
+# Local-only MFi accessory material (never commit)
+**/assets/offline-mfi/
