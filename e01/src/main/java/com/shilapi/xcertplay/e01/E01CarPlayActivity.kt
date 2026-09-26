@@ -38,8 +38,10 @@ import com.shilapi.xcertplay.airplay.CarPlayMediaEngine
 import com.shilapi.xcertplay.media.AndroidMediaSink
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.network.CarPlayVpnService
+import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.MfiTarget
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
+import java.io.File
 import java.net.URL
 import java.util.ArrayDeque
 
@@ -56,8 +58,13 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var settingsOverlay: View
     private lateinit var diagnosticSwitch: Switch
     private lateinit var localMfiSwitch: Switch
+    private lateinit var fileLogSwitch: Switch
+    private lateinit var verboseSwitch: Switch
+    private lateinit var debugStatusLabel: TextView
     private lateinit var serverInput: EditText
     private lateinit var tokenInput: EditText
+
+    private var logFile: E01LogFile? = null
 
     private var currentSurface: Surface? = null
     private var mediaSink: AndroidMediaSink? = null
@@ -69,6 +76,7 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        openLogFileIfEnabled()
         val bootstrapError = runCatching { E01Bootstrap.ensure(this) }.exceptionOrNull()
         identity = E01Persistence.loadIdentity(this)
         setContentView(buildContentView())
@@ -80,8 +88,11 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         tokenInput.setText(settings.bearerToken)
         diagnosticSwitch.isChecked = E01Persistence.loadNoMfiDiagnostic(this)
         localMfiSwitch.isChecked = target == MfiTarget.LOCAL
+        fileLogSwitch.isChecked = E01Persistence.loadFileLogEnabled(this)
+        verboseSwitch.isChecked = E01Persistence.loadVerboseLog(this)
         updateMfiInputsEnabled()
-        appendLog("E01 wired host ready")
+        refreshDebugStatus()
+        appendLog("E01 wired host ready (versionCode=${appVersionCode()})")
         if (bootstrapError != null) {
             appendLog("Local MFi identity unavailable: ${bootstrapError.message ?: bootstrapError.javaClass.simpleName}")
             if (localMfiSwitch.isChecked) {
@@ -128,6 +139,8 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         mediaSink?.close()
         mediaSink = null
         currentSurface = null
+        logFile?.close()
+        logFile = null
         super.onDestroy()
     }
 
@@ -392,6 +405,68 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
                 topMargin = dp(12)
             },
         )
+
+        panel.addView(sectionLabel("DEBUG"))
+        fileLogSwitch = Switch(this).apply {
+            text = "Persist logs to disk"
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            setPadding(0, dp(4), 0, dp(8))
+            setOnCheckedChangeListener { _, checked ->
+                E01Persistence.saveFileLogEnabled(this@E01CarPlayActivity, checked)
+                if (checked) openLogFileIfEnabled() else closeLogFile()
+                refreshDebugStatus()
+            }
+        }
+        panel.addView(
+            fileLogSwitch,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)),
+        )
+        verboseSwitch = Switch(this).apply {
+            text = "Verbose runtime logging"
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            setPadding(0, dp(4), 0, dp(8))
+            setOnCheckedChangeListener { _, checked ->
+                E01Persistence.saveVerboseLog(this@E01CarPlayActivity, checked)
+                appendLog("verbose logging ${if (checked) "on" else "off"}")
+            }
+        }
+        panel.addView(
+            verboseSwitch,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)),
+        )
+        debugStatusLabel = label("", 12f, TEXT_SECONDARY).apply {
+            setPadding(0, dp(8), 0, 0)
+            setTextIsSelectable(true)
+        }
+        panel.addView(
+            debugStatusLabel,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        val debugButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        debugButtons.addView(
+            actionButton("Print log path", ACCENT) { printLogPathHint() },
+            LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) },
+        )
+        debugButtons.addView(
+            actionButton("Clear logs", DANGER) { clearLogsAndRefresh() },
+            LinearLayout.LayoutParams(0, dp(44), 1f),
+        )
+        panel.addView(
+            debugButtons,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+
         panel.addView(
             label(
                 "Display: 1280 x 720, H.264, 30 fps\nTransport: USB config 6 + NCM\nMicrophone: off",
@@ -697,9 +772,11 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
             logView.visibility = View.VISIBLE
         }
         appendLog("$stage: $detail")
+        refreshDebugStatus()
     }
 
     private fun appendLog(message: String) {
+        logFile?.append(message)
         if (Looper.myLooper() != Looper.getMainLooper()) {
             runOnUiThread { appendLog(message) }
             return
@@ -707,6 +784,101 @@ class E01CarPlayActivity : Activity(), SurfaceHolder.Callback {
         logLines.addLast(message)
         while (logLines.size > MAX_LOG_LINES) logLines.removeFirst()
         logView.text = logLines.joinToString("\n")
+    }
+
+    private fun openLogFileIfEnabled() {
+        if (!E01Persistence.loadFileLogEnabled(this)) return
+        if (logFile != null) return
+        val directory = File(noBackupFilesDir, "logs")
+        val log = E01LogFile(File(directory, "e01.log"))
+        log.open("session ${System.currentTimeMillis()}")
+        logFile = log
+    }
+
+    private fun closeLogFile() {
+        logFile?.close()
+        logFile = null
+    }
+
+    private fun refreshDebugStatus() {
+        if (!::debugStatusLabel.isInitialized) return
+        val target = E01Persistence.loadMfiTarget(this)
+        val remote = E01Persistence.loadRemoteMfi(this)
+        val offlineDir = File(noBackupFilesDir, LocalMfiAuthenticationClient.DIRECTORY)
+        val fileLogEnabled = E01Persistence.loadFileLogEnabled(this)
+        val log = logFile
+        val activeSize = log?.activeFile()?.takeIf { it.isFile }?.length() ?: 0
+        val rotatedSize = log?.rotatedFile()?.takeIf { it.isFile }?.length() ?: 0
+        val pubKeyPrefix = identity.publicKey
+            .take(4)
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        val text = buildString {
+            append("Version: ")
+            append(appVersionCode())
+            append('\n')
+            append("MFi backend: ")
+            append(target.name)
+            append('\n')
+            append("Remote server: ")
+            append(if (remote.serverUrl.isBlank()) "(unset)" else remote.serverUrl)
+            append('\n')
+            append("Offline MFi dir: ")
+            append(if (offlineDir.isDirectory) "present" else "missing")
+            append('\n')
+            append("Identity pubKey: ")
+            append(pubKeyPrefix)
+            append("...\n")
+            append("File log: ")
+            append(if (fileLogEnabled) "on" else "off")
+            append(' ')
+            append(activeSize + rotatedSize)
+            append(" B (active ")
+            append(activeSize)
+            append(", rotated ")
+            append(rotatedSize)
+            append(")\n")
+            append("Log path: ")
+            append(log?.activeFile()?.absolutePath ?: "(disabled)")
+            log?.lastErrorMessage?.let {
+                append('\n')
+                append("Last log error: ")
+                append(it)
+            }
+        }
+        debugStatusLabel.text = text
+    }
+
+    private fun printLogPathHint() {
+        val log = logFile ?: run {
+            appendLog("file log disabled; enable 'Persist logs to disk' first")
+            return
+        }
+        val active = log.activeFile().absolutePath
+        appendLog("log active=$active size=${log.activeFile().length()}B")
+        appendLog("adb pull /data/data/${packageName}/no_backup/logs/e01.log ./")
+        refreshDebugStatus()
+    }
+
+    private fun clearLogsAndRefresh() {
+        val log = logFile
+        if (log != null) {
+            log.clear()
+            log.open("cleared ${System.currentTimeMillis()}")
+        } else {
+            File(File(noBackupFilesDir, "logs"), "e01.log").delete()
+            File(File(noBackupFilesDir, "logs"), "e01.log.1").delete()
+        }
+        appendLog("logs cleared")
+        refreshDebugStatus()
+    }
+
+    private fun appVersionCode(): Long {
+        return try {
+            val info = packageManager.getPackageInfo(packageName, 0)
+            @Suppress("DEPRECATION") info.versionCode.toLong()
+        } catch (_: Throwable) {
+            -1L
+        }
     }
 
     private fun showSettings(show: Boolean) {

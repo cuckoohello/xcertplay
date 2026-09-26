@@ -15,7 +15,7 @@ E01 有线 CarPlay 的构建、安装、逐阶段判据与验收。执行前先�
 | 应用版本 | `0.2.0` / versionCode `2` |
 | Android | 5.1 / API 22 |
 | APK | `e01/build/outputs/apk/debug/e01-debug.apk` |
-| APK SHA-256（本轮 Local MFi 构建） | `15f73c46366de733df02357187e942426097cefab336e09727d51b9ae5a3c6e0` |
+| APK SHA-256（本轮 Debug 面板构建） | `30a856dd7b688b832a3f6d9b683c3ad7a262d944229a5e03db808787a8e1684e` |
 
 实车已证明的边界见
 [`evidence/e01-runtime-2026-09-23.md`](evidence/e01-runtime-2026-09-23.md)：
@@ -73,6 +73,8 @@ No-MFi diagnostics
 | 麦克风 | 通用模块可启用 | E01 强制关闭且不申请录音权限 | 先收敛首轮风险 | Siri/电话上行本轮不验收 |
 | 持久化 | 通用应用数据 | E01 独立 SharedPreferences | 不污染现有应用 | 保存身份、AirPlay 配对、Lockdown 记录和 MFi 配置 |
 | UI | 通用多功能页面 | 原生全屏 Surface + 状态 + 设置侧栏 | 减少 E01 运行时依赖 | 齿轮入口可改配置，重连需人工触发 |
+| Debug 面板 | 无 | 设置侧栏新增 DEBUG 分区（后端 / 版本 / Offline dir / 磁盘日志 / 详细日志 / 清理与 adb pull 提示） | 车机侧原地排障 | 见 §Debug 设置与日志 |
+| 磁盘日志 | 无 | 双文件 rotate，`noBackupFilesDir/logs/e01.log` + `e01.log.1`，各 512 KiB，总 ≤ 1 MiB | 便于跨会话回溯 iAP2/AirPlay 事件 | 首次启动即建立；退出/清理不影响 APK |
 
 ## 4. 人工配置单
 
@@ -382,4 +384,49 @@ shasum -a 256 e01/src/main/assets/offline-mfi/*  # 必须与上表哈希完全�
 - `./gradlew :e01:assembleDebug -Pxcertplay.skipNative=true` 成功，APK SHA-256 与 §1 记录一致；
 - `unzip -l e01/build/outputs/apk/debug/e01-debug.apk | rg offline-mfi` 显示 `identity.pk8` 与 `certificate.p7b` 且哈希与本节 §凭据来源一致；
 - 实车运行时 logcat 首次启动含 `E01Bootstrap` 与 `local offline MFi ready protocolMajor=3 certificateBytes=<n>`，iPhone 返回 `0xAA05 AuthenticationSucceeded`。
+
+## Debug 设置与日志
+
+齿轮 → 设置侧栏 → `DEBUG` 分区：
+
+- **Persist logs to disk**：默认开。开启后每条 `appendLog` 与 `updateStatus` 同步写入 [`E01LogFile`](../e01/src/main/java/com/shilapi/xcertplay/e01/E01LogFile.kt)，路径 `noBackupFilesDir/logs/e01.log`。文件超过 512 KiB 时轮转到 `e01.log.1`，总磁盘占用不超过 1 MiB。关闭开关会 flush 并关闭 writer，之前的两份文件保留在磁盘上。
+- **Verbose runtime logging**：持久化到 SharedPreferences `verbose_log`，可被下游控制器读取（当前为占位开关，不改变运行时链路，避免误触发协议行为）。
+- **状态卡**（`debugStatusLabel`，可长按选中复制）：
+  - `Version`：APK versionCode；
+  - `MFi backend`：`LOCAL` / `REMOTE`（无 MFi 诊断按 `MfiTarget` 判断）；
+  - `Remote server`：Remote MFi URL 或 `(unset)`；
+  - `Offline MFi dir`：`present` / `missing`（对应 `noBackupFilesDir/offline-mfi/`）；
+  - `Identity pubKey`：AirPlay 身份公钥前 4 字节 hex，用于跨会话追踪同一附件身份；
+  - `File log`：当前状态与磁盘上两个文件的字节数；
+  - `Log path`：完整落盘路径；
+  - `Last log error`：若 IO 写入曾失败，最后一次错误消息。
+- **Print log path**：把 `log active=<path> size=<n>B` 与建议的 `adb pull` 命令追加到 UI/磁盘日志里；不会触碰凭据。
+- **Clear logs**：删除 `e01.log` 与 `e01.log.1`，然后重新打开一份带 `cleared <ts>` 头的活动文件；不影响 SharedPreferences、Lockdown pair record 或 offline MFi 凭据。
+
+### 磁盘日志布局
+
+```text
+/data/data/com.shilapi.xcertplay.e01/no_backup/logs/
+  ├── e01.log       # active, ≤ 512 KiB
+  └── e01.log.1     # rotated, ≤ 512 KiB
+```
+
+- 每行前缀 `yyyy-MM-dd HH:mm:ss.SSS`；
+- 应用启动写入 `---- session <epoch-ms> ----`，方便切割不同会话；
+- 关闭 App 后文件保留，直到手动 Clear 或 `pm clear`。
+
+### 采集与回滚
+
+```bash
+# 拉走当前活动日志
+adb -s <ip>:5555 pull /data/data/com.shilapi.xcertplay.e01/no_backup/logs/e01.log ./
+# 拉走上一段轮转日志
+adb -s <ip>:5555 pull /data/data/com.shilapi.xcertplay.e01/no_backup/logs/e01.log.1 ./
+# UI 内一键清空
+# 设置 → DEBUG → Clear logs
+# 或强制清空整个应用数据
+adb shell pm clear com.shilapi.xcertplay.e01
+```
+
+回滚：本节只新增文件与开关，不改协议链路。撤回时 `git checkout HEAD -- e01/src/main/java/com/shilapi/xcertplay/e01/ docs/03-wired-carplay.md` 即可。
 

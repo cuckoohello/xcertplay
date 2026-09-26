@@ -20,6 +20,8 @@ internal object E01Persistence {
     private const val KEY_REMOTE_SERVER = "remote_mfi_server"
     private const val KEY_REMOTE_TOKEN = "remote_mfi_token"
     private const val KEY_NO_MFI_DIAGNOSTIC = "no_mfi_diagnostic"
+    private const val KEY_FILE_LOG_ENABLED = "file_log_enabled"
+    private const val KEY_VERBOSE_LOG = "verbose_log"
     private const val KEY_IDENTITY_PRIVATE = "identity_private"
     private const val KEY_IDENTITY_PUBLIC = "identity_public"
     private const val KEY_PAIRING_ID = "pairing_id"
@@ -70,6 +72,20 @@ internal object E01Persistence {
         prefs(context).edit()
             .putBoolean(KEY_NO_MFI_DIAGNOSTIC, enabled)
             .apply()
+    }
+
+    fun loadFileLogEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_FILE_LOG_ENABLED, true)
+
+    fun saveFileLogEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_FILE_LOG_ENABLED, enabled).apply()
+    }
+
+    fun loadVerboseLog(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_VERBOSE_LOG, false)
+
+    fun saveVerboseLog(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_VERBOSE_LOG, enabled).apply()
     }
 
     fun loadIdentity(context: Context): AirPlayIdentity {
