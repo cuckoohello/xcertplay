@@ -1,4 +1,6 @@
-# 几何 C E01 有线 CarPlay 运行与验收手册
+# 03 · 有线 CarPlay 执行手册
+
+E01 有线 CarPlay 的构建、安装、逐阶段判据与验收。执行前先完成 [02-vehicle-setup.md](02-vehicle-setup.md) §1–§3。
 
 ## 1. 范围与基线
 
@@ -18,7 +20,7 @@
 | APK SHA-256 | `096c333ed84b241d7ae3fe8d429c39ac386742682ce8a0ff807010160204edec` |
 
 实车已证明的边界见
-[`e01-runtime-evidence-2026-09-23.zh-CN.md`](e01-runtime-evidence-2026-09-23.zh-CN.md)：
+[`evidence/e01-runtime-2026-09-23.md`](evidence/e01-runtime-2026-09-23.md)：
 
 - Apple `0x52` 可触发重枚举；
 - config 6、USBMUX、CDC-NCM 曾在同一轮测试中工作；
