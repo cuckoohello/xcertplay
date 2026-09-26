@@ -32,6 +32,7 @@ interface AirPlaySessionListener {
     fun onHostUiRequested(session: AirPlaySession) {}
     fun onCommand(session: AirPlaySession, type: String, params: Map<String, Any?>) {}
     fun onDebugLog(message: String) {}
+    fun onVideoFrameRendered(session: AirPlaySession) {}
 }
 
 /** Stream transport seam; media decode/render is supplied by a later layer. */
@@ -94,6 +95,10 @@ class AirPlaySession(
     fun syncedNtp(): BigInteger = ntp.syncedNtp()
 
     internal fun logDebug(message: String) = debugLog(message)
+
+    internal fun videoFrameRendered() {
+        if (!closed.get()) listener.onVideoFrameRendered(this)
+    }
 
     internal fun logTrace(message: String) = trace(message)
 

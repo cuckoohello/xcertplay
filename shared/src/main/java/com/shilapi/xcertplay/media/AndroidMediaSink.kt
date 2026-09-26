@@ -136,12 +136,6 @@ class AndroidMediaSink(
     }
 }
 
-private sealed interface VideoJob {
-    data class Config(val codec: VideoCodec, val codecData: ByteArray) : VideoJob
-    data class Frame(val nalus: ByteArray) : VideoJob
-    data class SurfaceChanged(val surface: Surface?) : VideoJob
-}
-
 /** Serial MediaCodec video decoder: one worker owns configure and frame feeding. */
 private class VideoDecoder(
     surface: Surface?,
@@ -185,6 +179,7 @@ private class VideoDecoder(
                         is VideoJob.Config -> configureDecoder(job)
                         is VideoJob.Frame -> feed(job.nalus)
                         is VideoJob.SurfaceChanged -> changeSurface(job.surface)
+                        VideoJob.Resync -> Unit
                     }
                 } catch (error: Exception) {
                     if (running) Log.e(TAG, "video decoder job failed: ${job.javaClass.simpleName}", error)

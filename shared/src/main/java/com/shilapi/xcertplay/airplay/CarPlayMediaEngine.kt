@@ -15,6 +15,8 @@ interface MediaSink {
     fun onVideoCodec(type: Int, codec: VideoCodec) {}
     fun onVideoConfig(type: Int, codecData: ByteArray) {}
     fun onVideoFrame(type: Int, naluBytes: ByteArray) {}
+    fun setVideoRecoveryHandler(type: Int, handler: () -> Unit) {}
+    fun setVideoDiagnosticHandler(type: Int, handler: (String) -> Unit) {}
     fun onScreenStreamActive(type: Int, active: Boolean) {}
     fun onAudioStarted(type: Int, format: AudioFormat, firstSample: Int) {}
     fun onAudioRtp(type: Int, format: AudioFormat, rtp: ByteArray, sample: Int) {}
@@ -69,6 +71,16 @@ class CarPlayMediaEngine(
         val streamKey = StreamKey(session, type)
         Log.i(TAG, "airplay screen key connectionID=${unsignedPlistDecimal(stream["streamConnectionID"])}")
         val screen = ScreenStream(key)
+        sink.setVideoDiagnosticHandler(type) {
+            if (it == "first frame rendered") session.videoFrameRendered()
+            session.logDebug("Video: $it")
+        }
+        sink.setVideoRecoveryHandler(type) {
+            if (streams[streamKey] === screen) {
+                val sent = session.sendCommand(mapOf("type" to "forceKeyFrame"))
+                session.logDebug("Video recovery: requested keyframe sent=$sent")
+            }
+        }
         val port = screen.listen(
             object : ScreenStream.Listener {
                 override fun onCodec(codec: VideoCodec) = sink.onVideoCodec(type, codec)

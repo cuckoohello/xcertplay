@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.media
 
+import com.shilapi.xcertplay.airplay.VideoCodec
 import java.io.ByteArrayOutputStream
 
 /**
@@ -70,12 +71,12 @@ object MediaCodecSupport {
         while (inputOffset + 4 <= lengthPrefixed.size) {
             val length = readU32Be(lengthPrefixed, inputOffset)
             inputOffset += 4
-            if (length <= 0 || inputOffset + length > lengthPrefixed.size) break
-            if (length > Int.MAX_VALUE - outputSize - START_CODE.size) break
+            if (length <= 0 || length > lengthPrefixed.size - inputOffset) return ByteArray(0)
+            if (length > Int.MAX_VALUE - outputSize - START_CODE.size) return ByteArray(0)
             outputSize += START_CODE.size + length
             inputOffset += length
         }
-        if (outputSize == 0) return ByteArray(0)
+        if (outputSize == 0 || inputOffset != lengthPrefixed.size) return ByteArray(0)
 
         val output = ByteArray(outputSize)
         var offset = 0
@@ -91,6 +92,27 @@ object MediaCodecSupport {
             offset += length
         }
         return output
+    }
+
+    /** IDR (AVC) or IRAP (HEVC) starts an independently decodable reference chain. */
+    fun isRandomAccess(annexB: ByteArray, codec: VideoCodec): Boolean {
+        var cursor = 0
+        while (cursor + 3 < annexB.size) {
+            val prefix = when {
+                annexB[cursor] != 0.toByte() || annexB[cursor + 1] != 0.toByte() -> 0
+                annexB[cursor + 2] == 1.toByte() -> 3
+                annexB[cursor + 2] == 0.toByte() && annexB[cursor + 3] == 1.toByte() -> 4
+                else -> 0
+            }
+            if (prefix > 0 && cursor + prefix < annexB.size) {
+                val header = annexB[cursor + prefix].toInt() and 255
+                if (codec == VideoCodec.H264 && header and 31 == 5) return true
+                if (codec == VideoCodec.H265 && cursor + prefix + 1 < annexB.size &&
+                    (header shr 1) and 63 in 16..21) return true
+                cursor += prefix
+            } else cursor++
+        }
+        return false
     }
 
     /** Wraps one raw AAC-LC access unit in an MPEG-4 ADTS frame. */

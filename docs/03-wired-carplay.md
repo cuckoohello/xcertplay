@@ -15,7 +15,7 @@ E01 有线 CarPlay 的构建、安装、逐阶段判据与验收。执行前先�
 | 应用版本 | `0.2.0` / versionCode `2` |
 | Android | 5.1 / API 22 |
 | APK | `e01/build/outputs/apk/debug/e01-debug.apk` |
-| APK SHA-256（本轮 Lockdown 稳定性构建） | `fddff78a79f30f51353836dfedf293e1348087369f73400fb238c9e802a4f63c` |
+| APK SHA-256（本轮 视频恢复 hook 构建） | `8501c3bcdad4a07c4aa606e7ab4abbb86d02f4a5b88503a4e09c709dd65cfd61` |
 
 实车已证明的边界见
 [`evidence/e01-runtime-2026-09-23.md`](evidence/e01-runtime-2026-09-23.md)：
@@ -79,6 +79,8 @@ No-MFi diagnostics
 | iAP2 identification 声明 | AA 消息未列入 `MESSAGES_SENT_BY_ACCESSORY` / `MESSAGES_RECEIVED_FROM_PHONE` | 追加 `0xAA00..0xAA05` | Local MFi 在 identification 后立刻进入 AA 循环，须在声明列表内 | `Iap2MfiAuthenticationClient` 帧不再被 identification 丢弃 |
 | Lockdown carkit 服务打开 | `open(pairRecord, label)` 内联写死 `com.apple.carkit.service` | 抽出 `openService(pairRecord, label, serviceName)`，`open` 转为 wrapper | 迁自 DiPlay：为未来打开其他 Lockdown 服务（如 mobileactivationd 之类）留口；行为完全等价 | 现有 `open(...)` 调用签名不变 |
 | Lockdown TLS 端点校验 | `SSLEngine` 默认可能开启 endpoint identification | `sslParameters.endpointIdentificationAlgorithm = null` | Lockdown 是 P2P TLS 无 SNI，默认端点校验会导致 P+ Android 拒绝连接 | E01 API 22 上 `SSLParameters` 及此 setter 均可用（已核 `javap`） |
+| 视频回放骨架（准备中） | `AndroidMediaSink` 内私有 `VideoJob` sealed，`LinkedBlockingQueue` 直连；`MediaSink` 无恢复/诊断 hook | 新增公共 `VideoJob` / `VideoDecodeQueue` / `VideoReferenceChain` / `VideoInputPump`；`MediaSink` 新增 `setVideoRecoveryHandler` / `setVideoDiagnosticHandler` 默认空实现；`AirPlaySessionListener` 新增 `onVideoFrameRendered`，`AirPlaySession` 增加 `videoFrameRendered()`；`CarPlayMediaEngine.onScreen` 建立时接线，`report("first frame rendered")` → `session.videoFrameRendered()`，恢复 handler 发 `forceKeyFrame` sendCommand | 迁自 DiPlay，把关键帧/丢帧/背压诊断能力搬进 shared；`AndroidMediaSink` 本轮仅去掉旧 file-private `VideoJob`，实际接入下一轮 M6 完成 | 现有 sink 行为等价（`Resync` 分支被 no-op），M6 前不改变解码路径 |
+| `MediaCodecSupport` 严格 NALU 边界 | 越界 / 输入未消费完时 break | 越界或有尾巴时直接返回 `ByteArray(0)`；新增 `isRandomAccess(annexB, codec)` | 迁自 DiPlay；错误 access unit 主动拒绝，避免 MediaCodec 拿到半包 | 老正常入包不受影响 |
 
 ## 4. 人工配置单
 
