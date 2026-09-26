@@ -31,7 +31,8 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class WifiP2pGroupManager(context: Context) : WirelessHotspotManager {
     private val appContext = context.applicationContext
-    private val p2pManager = appContext.getSystemService(WifiP2pManager::class.java)
+    private val p2pManager =
+        appContext.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
         ?: throw IllegalStateException("WifiP2pManager is unavailable")
     private val stateLock = Object()
     private val random = SecureRandom()
