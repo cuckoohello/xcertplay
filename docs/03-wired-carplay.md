@@ -332,6 +332,16 @@ Local MFi 使用 APK 内置附件私钥 + Apple 附件证书直接在 Android �
 ### 部署步骤（每台构建机独立执行，不入 git）
 
 ```bash
+# 一键脚本：提取 + 强制 SHA 校验 + 可选构建
+./scripts/e01-install-offline-mfi.sh /path/to/DiPlay.apk         # 只部署
+./scripts/e01-install-offline-mfi.sh /path/to/DiPlay.apk --build # 部署并触发 :e01:assembleDebug
+```
+
+脚本会先校验 APK 与解出的 identity/certificate 三个 SHA-256，与本节 §凭据来源 完全一致才落盘。任一不匹配会清空 staging 并 fail-closed。
+
+如需手工执行，等价于：
+
+```bash
 mkdir -p e01/src/main/assets/offline-mfi
 unzip -p /path/to/DiPlay.apk assets/offline-mfi/identity.pk8    > e01/src/main/assets/offline-mfi/identity.pk8
 unzip -p /path/to/DiPlay.apk assets/offline-mfi/certificate.p7b > e01/src/main/assets/offline-mfi/certificate.p7b
@@ -339,7 +349,7 @@ shasum -a 256 e01/src/main/assets/offline-mfi/*  # 必须与上表哈希完全�
 ./gradlew :e01:assembleDebug -Pxcertplay.skipNative=true
 ```
 
-`.gitignore` 中已存在 `**/assets/offline-mfi/`。`git status` 不能显示这两个文件；若显示，立即回退。
+`.gitignore` 中已存在 `**/assets/offline-mfi/`。`git status` 不能显示这两个文件；若显示，立即回退。脚本自身也会二次调用 `git check-ignore`，若 `.gitignore` 规则被误改动会拒绝落盘。
 
 ### 运行时行为
 

@@ -200,7 +200,7 @@ api17probe/src/main/java/com/shilapi/xcertplay/api17probe/
   - 验收：`03-wired-carplay.md §8.3`。
 - **T-D2**：MFi 完整鉴权（Local 优先，Remote 回退）
   - 目标：优先验收 `LocalMfiAuthenticationClient`（内部专用，凭据来自 DiPlay.apk）在 E01 上的 iAP2 / AirPlay MFi-SAP；`RemoteMfiAuthenticationClient` 保留为可选回退；
-  - 依赖：`assets/offline-mfi/*` 已按 [03-wired-carplay.md §Local MFi](03-wired-carplay.md#local-mfi) 部署，或 Remote MFi 服务在线；
+  - 依赖：`assets/offline-mfi/*` 已按 [03-wired-carplay.md §Local MFi](03-wired-carplay.md#local-mfi) 部署（推荐 `scripts/e01-install-offline-mfi.sh`），或 Remote MFi 服务在线；
   - 验收：`03-wired-carplay.md §Local MFi §验收` 与 §7.2。
 - **T-D3**：H.264 / 音频 / 触控端到端
   - 目标：`AndroidMediaSink`、`CarPlayTouchMapper`、`AudioStream` 在 E01 上实车验证；
