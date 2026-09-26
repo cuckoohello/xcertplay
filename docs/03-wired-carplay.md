@@ -15,7 +15,7 @@ E01 有线 CarPlay 的构建、安装、逐阶段判据与验收。执行前先�
 | 应用版本 | `0.2.0` / versionCode `2` |
 | Android | 5.1 / API 22 |
 | APK | `e01/build/outputs/apk/debug/e01-debug.apk` |
-| APK SHA-256（本轮 视频恢复 hook 构建） | `8501c3bcdad4a07c4aa606e7ab4abbb86d02f4a5b88503a4e09c709dd65cfd61` |
+| APK SHA-256（本轮 B3 M6 视频恢复接入构建） | `bb1203a7c1d7b102349fc5b2b1ad62466dfe416494b66fa274fdb682d3153ad8` |
 
 实车已证明的边界见
 [`evidence/e01-runtime-2026-09-23.md`](evidence/e01-runtime-2026-09-23.md)：
@@ -80,6 +80,7 @@ No-MFi diagnostics
 | Lockdown carkit 服务打开 | `open(pairRecord, label)` 内联写死 `com.apple.carkit.service` | 抽出 `openService(pairRecord, label, serviceName)`，`open` 转为 wrapper | 迁自 DiPlay：为未来打开其他 Lockdown 服务（如 mobileactivationd 之类）留口；行为完全等价 | 现有 `open(...)` 调用签名不变 |
 | Lockdown TLS 端点校验 | `SSLEngine` 默认可能开启 endpoint identification | `sslParameters.endpointIdentificationAlgorithm = null` | Lockdown 是 P2P TLS 无 SNI，默认端点校验会导致 P+ Android 拒绝连接 | E01 API 22 上 `SSLParameters` 及此 setter 均可用（已核 `javap`） |
 | 视频回放骨架（准备中） | `AndroidMediaSink` 内私有 `VideoJob` sealed，`LinkedBlockingQueue` 直连；`MediaSink` 无恢复/诊断 hook | 新增公共 `VideoJob` / `VideoDecodeQueue` / `VideoReferenceChain` / `VideoInputPump`；`MediaSink` 新增 `setVideoRecoveryHandler` / `setVideoDiagnosticHandler` 默认空实现；`AirPlaySessionListener` 新增 `onVideoFrameRendered`，`AirPlaySession` 增加 `videoFrameRendered()`；`CarPlayMediaEngine.onScreen` 建立时接线，`report("first frame rendered")` → `session.videoFrameRendered()`，恢复 handler 发 `forceKeyFrame` sendCommand | 迁自 DiPlay，把关键帧/丢帧/背压诊断能力搬进 shared；`AndroidMediaSink` 本轮仅去掉旧 file-private `VideoJob`，实际接入下一轮 M6 完成 | 现有 sink 行为等价（`Resync` 分支被 no-op），M6 前不改变解码路径 |
+| 视频稳定性（B3 M6 接入） | `AndroidMediaSink.VideoDecoder` 用 `LinkedBlockingQueue<VideoJob>` + `queue.take()` 直连，无 reference chain / 老帧丢弃 / 关键帧回请 / 首帧回调 | `VideoDecoder.queue` 换成 `VideoDecodeQueue`；主循环 `queue.poll(5ms)` 反饥饿；`Frame` 超过 `MAX_FRAME_AGE_NS=250 ms` → `discardFrames()` + `recover("video backlog exceeded 250 ms")`；`Resync` → `recover("video queue overflow")`；`feed` 走 `referenceChain.accepts/onQueued` gating + `VideoInputPump.acquire`；首帧 `report("first frame rendered")` 触发 `AirPlaySession.videoFrameRendered()`；`AndroidMediaSink` 新增 `screenStateLock/activeScreenTypes/videoRecoveryHandlers/videoDiagnosticHandlers/recoveryPending` + `carplay-video-recovery` daemon executor，`onScreenStreamActive(false)` 清 handlers + decoder + pendingVideoCodec；`configureDecoder` 加 `KEY_LOW_LATENCY`（SDK≥R + capability guard）+ 失败 `runCatching{candidate?.release()}` + `report(...)` | 迁自 DiPlay B3 M6：主动请关键帧、backlog 反压、诊断透传上到 UI 与 AirPlay 侧 | **保留 API 22 兼容**：不引入 `KEY_PRIORITY`（API 23+）、`AudioTrack.Builder`-only 路径、`AudioTrack.WRITE_BLOCKING`（<M 的 legacy 分支保留）、`USAGE_ASSISTANT` 的 SDK≥O guard 保留；`setOutputSurface` 仍在 SDK≥M guard 内；`MediaFormat.KEY_STRIDE/SLICE_HEIGHT/COLOR_*` 引用继续走 `KEY_*_COMPAT` 字符串常量；`ConcurrentHashMap.computeIfAbsent` 未采用，`videoDecoder(type)`/`onMicrophoneStarted` 保留 `putIfAbsent` |
 | `MediaCodecSupport` 严格 NALU 边界 | 越界 / 输入未消费完时 break | 越界或有尾巴时直接返回 `ByteArray(0)`；新增 `isRandomAccess(annexB, codec)` | 迁自 DiPlay；错误 access unit 主动拒绝，避免 MediaCodec 拿到半包 | 老正常入包不受影响 |
 
 ## 4. 人工配置单
