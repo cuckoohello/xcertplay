@@ -244,8 +244,10 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
             return min(MAXIMUM_TIMEOUT_MILLIS, (remainingNanos + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND)
         }
 
-        /* Keep this list paired with Iap2WiredControlClient; no stop or AA messages are claimed. */
+        /* Include the authentication messages implemented by Iap2MfiAuthenticationClient. */
         private val MESSAGES_SENT_BY_ACCESSORY = intArrayOf(
+            0xaa01, // AuthenticationCertificate
+            0xaa03, // AuthenticationResponse
             0x5000, // StartNowPlayingUpdates
             0x5002, // StopNowPlayingUpdates
             0x5200, // StartRouteGuidanceUpdates
@@ -260,6 +262,10 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
             0x4301, // CarPlayStartSession
         )
         private val MESSAGES_RECEIVED_FROM_PHONE = intArrayOf(
+            0xaa00, // RequestAuthenticationCertificate
+            0xaa02, // RequestAuthenticationChallengeResponse
+            0xaa04, // AuthenticationFailed
+            0xaa05, // AuthenticationSucceeded
             0xea00, // StartExternalAccessoryProtocolSession
             0xea01, // StopExternalAccessoryProtocolSession
             0x5001, // NowPlayingUpdate

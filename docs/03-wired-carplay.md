@@ -15,7 +15,7 @@ E01 有线 CarPlay 的构建、安装、逐阶段判据与验收。执行前先�
 | 应用版本 | `0.2.0` / versionCode `2` |
 | Android | 5.1 / API 22 |
 | APK | `e01/build/outputs/apk/debug/e01-debug.apk` |
-| APK SHA-256（本轮 Debug 面板构建） | `30a856dd7b688b832a3f6d9b683c3ad7a262d944229a5e03db808787a8e1684e` |
+| APK SHA-256（本轮 iAP2 阶段化超时构建） | `17791f0fbf8e37354916c0a73ef96fba57cfea0779606a94c5e99cc62028371a` |
 
 实车已证明的边界见
 [`evidence/e01-runtime-2026-09-23.md`](evidence/e01-runtime-2026-09-23.md)：
@@ -75,6 +75,8 @@ No-MFi diagnostics
 | UI | 通用多功能页面 | 原生全屏 Surface + 状态 + 设置侧栏 | 减少 E01 运行时依赖 | 齿轮入口可改配置，重连需人工触发 |
 | Debug 面板 | 无 | 设置侧栏新增 DEBUG 分区（后端 / 版本 / Offline dir / 磁盘日志 / 详细日志 / 清理与 adb pull 提示） | 车机侧原地排障 | 见 §Debug 设置与日志 |
 | 磁盘日志 | 无 | 双文件 rotate，`noBackupFilesDir/logs/e01.log` + `e01.log.1`，各 512 KiB，总 ≤ 1 MiB | 便于跨会话回溯 iAP2/AirPlay 事件 | 首次启动即建立；退出/清理不影响 APK |
+| iAP2 控制超时 | 单一 `deadlineNanos: Long` 到期即失败 | `Iap2ControlDeadline`：握手前 60 s，`authenticated()` 后转 30 s 轮询；支持 `NO_TIMEOUT_MILLIS = Long.MAX_VALUE` | 迁自 DiPlay，避免长驾驶被固定 timeout 打断，同时保留握手上限 | `Iap2WiredControlClient` 与调用侧行为等价，E01 现有 24 h timeout 依然合法 |
+| iAP2 identification 声明 | AA 消息未列入 `MESSAGES_SENT_BY_ACCESSORY` / `MESSAGES_RECEIVED_FROM_PHONE` | 追加 `0xAA00..0xAA05` | Local MFi 在 identification 后立刻进入 AA 循环，须在声明列表内 | `Iap2MfiAuthenticationClient` 帧不再被 identification 丢弃 |
 
 ## 4. 人工配置单
 

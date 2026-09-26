@@ -33,17 +33,18 @@ class Iap2WiredControlClient(
         require(availableCurrentMilliAmps in 0..0xffff) {
             "availableCurrentMilliAmps must be in 0..65535"
         }
-        require(timeoutMillis in 1..MAX_TIMEOUT_MILLIS) {
-            "timeoutMillis must be in 1..$MAX_TIMEOUT_MILLIS"
+        require(timeoutMillis == NO_TIMEOUT_MILLIS || timeoutMillis in 1..MAX_TIMEOUT_MILLIS) {
+            "timeoutMillis must be in 1..$MAX_TIMEOUT_MILLIS or NO_TIMEOUT_MILLIS"
         }
 
-        val deadlineNanos = deadlineAfter(timeoutMillis)
+        val deadlineNanos = Iap2ControlDeadline(timeoutMillis)
         Iap2IdentificationClient(session).identify(identification, requireRemaining(deadlineNanos))
         onProgress("iap2 identification accepted")
         var stage = Iap2WiredControlStage.IDENTIFIED
         mfi.run(session, requireRemaining(deadlineNanos), onProgress)
         stage = Iap2WiredControlStage.AUTHENTICATED
         onProgress("iap2 authentication accepted")
+        deadlineNanos.authenticated()
 
         send(powerSourceUpdate(availableCurrentMilliAmps), deadlineNanos)
         for (subscription in subscriptions()) send(subscription, deadlineNanos)
@@ -131,13 +132,13 @@ class Iap2WiredControlClient(
         }
     }
 
-    private fun send(frame: Iap2Frame, deadlineNanos: Long) {
+    private fun send(frame: Iap2Frame, deadlineNanos: Iap2ControlDeadline) {
         session.send(frame, requireRemaining(deadlineNanos))
     }
 
     private fun sendLatestLocation(
         provider: Iap2LocationProvider?,
-        deadlineNanos: Long,
+        deadlineNanos: Iap2ControlDeadline,
     ): Boolean {
         val sentence = provider?.latestNmea() ?: return false
         session.send(
@@ -163,6 +164,7 @@ class Iap2WiredControlClient(
     }
 
     companion object {
+        const val NO_TIMEOUT_MILLIS = Long.MAX_VALUE
         private const val CARPLAY_AVAILABILITY = 0x4300
         private const val CARPLAY_START_SESSION = 0x4301
         private const val LOCATION_POLL_INTERVAL_MILLIS = 1_000L
@@ -199,22 +201,11 @@ class Iap2WiredControlClient(
             }
         }
 
-        private fun deadlineAfter(timeoutMillis: Long): Long {
-            val now = System.nanoTime()
-            val delta = timeoutMillis * NANOS_PER_MILLISECOND
-            return if (Long.MAX_VALUE - now < delta) Long.MAX_VALUE else now + delta
-        }
-
-        private fun requireRemaining(deadlineNanos: Long): Long = remainingMillis(deadlineNanos).also {
+        private fun requireRemaining(deadlineNanos: Iap2ControlDeadline): Long = remainingMillis(deadlineNanos).also {
             if (it == 0L) throw IphoneUsbException.TimedOut("Timed out during wired iAP2 control bring-up")
         }
 
-        private fun remainingMillis(deadlineNanos: Long): Long {
-            val remaining = deadlineNanos - System.nanoTime()
-            if (remaining <= 0) return 0L
-            return ((remaining + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND)
-                .coerceAtMost(MAX_RECV_TIMEOUT_MILLIS)
-        }
+        private fun remainingMillis(deadlineNanos: Iap2ControlDeadline): Long = deadlineNanos.remainingMillis()
 
     }
 }
