@@ -7,7 +7,7 @@
 
 ## Features
 
-- CarPlay host applications for Android and Android Automotive OS.
+- CarPlay host application for Android head units.
 - Local software MFi authentication using a certificate/private-key file pair.
 - Wired and wireless CarPlay connections.
 - CarPlay Ultra triggering (the protocol stack is untested/incomplete, but it
@@ -51,10 +51,8 @@ saved.
 
 | Path | Purpose |
 | --- | --- |
-| `common/` | Shared CarPlay host activity, settings UI, persistence, and app resources used by both targets. |
-| `mobile/` | Standard Android target using the shared CarPlay host UI. |
-| `automotive/` | Android Automotive OS target with the shared host UI and advanced audio channel mapping. |
-| `shared/` | Car App Library code plus local MFi, iPhone, iAP2, NCM, VPN, AirPlay, and media implementations. |
+| `app/` | Android application module: host UI, settings, resources, manifests, and packaging. |
+| `core/` | CarPlay protocol, local MFi, iPhone, iAP2, NCM, VPN, AirPlay, and media implementation. |
 
 ## Requirements
 
@@ -70,22 +68,20 @@ On Windows PowerShell:
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
-.\gradlew.bat :shared:testDebugUnitTest :common:lintDebug :mobile:lintDebug :automotive:lintDebug :mobile:assembleDebug :automotive:assembleDebug
+.\gradlew.bat :core:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
 On macOS or Linux:
 
 ```bash
-./gradlew :shared:testDebugUnitTest :common:lintDebug :mobile:lintDebug :automotive:lintDebug :mobile:assembleDebug :automotive:assembleDebug
+./gradlew :core:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
 Unsigned release APKs:
 
 ```powershell
-.\gradlew.bat :mobile:assembleRelease :automotive:assembleRelease
+.\gradlew.bat :app:assembleRelease
 ```
-
-## Acknowledgements
 
 ## License
 

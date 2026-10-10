@@ -2,7 +2,7 @@ plugins {
     id 'com.android.library'
 }
 android {
-    namespace = 'com.shilapi.xcertplay.shared'
+    namespace = 'com.shilapi.xcertplay.core'
     compileSdk = 37
 
     defaultConfig {

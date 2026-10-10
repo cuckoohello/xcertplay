@@ -7,7 +7,7 @@
 
 ## Features
 
-- 面向 Android 和 Android Automotive OS 的 CarPlay 主机应用。
+- 面向 Android 车机的 CarPlay 主机应用。
 - 支持使用本地证书/私钥文件进行纯软件 MFi 认证。
 - 支持 CarPlay 有线或无线连接。
 - 支持触发 CarPlay Ultra （未测试/未完成的协议栈，但是确实可以在 iPhone 上触发 CarPlay Ultra 的提示）。
@@ -43,10 +43,8 @@
 
 | 路径 | 用途 |
 | --- | --- |
-| `common/` | 两个目标共用的 CarPlay 宿主界面、设置、持久化和应用资源。 |
-| `mobile/` | 使用共享 CarPlay 主机界面的 Android 应用。 |
-| `automotive/` | 使用共享主机界面并支持高级音频通道映射的 Android Automotive OS 应用。 |
-| `shared/` | Car App Library 代码，以及本地 MFi、iPhone、iAP2、NCM、VPN、AirPlay 和媒体实现。 |
+| `app/` | Android 应用模块：宿主界面、设置、资源、Manifest 和打包配置。 |
+| `core/` | CarPlay 协议、本地 MFi、iPhone、iAP2、NCM、VPN、AirPlay 和媒体实现。 |
 
 ## 环境要求
 
@@ -61,22 +59,20 @@
 
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
-.\gradlew.bat :shared:testDebugUnitTest :common:lintDebug :mobile:lintDebug :automotive:lintDebug :mobile:assembleDebug :automotive:assembleDebug
+.\gradlew.bat :core:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
 在 macOS 或 Linux 中：
 
 ```bash
-./gradlew :shared:testDebugUnitTest :common:lintDebug :mobile:lintDebug :automotive:lintDebug :mobile:assembleDebug :automotive:assembleDebug
+./gradlew :core:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
 构建未签名 release APK：
 
 ```powershell
-.\gradlew.bat :mobile:assembleRelease :automotive:assembleRelease
+.\gradlew.bat :app:assembleRelease
 ```
-
-## 致谢
 
 ## 许可证
 

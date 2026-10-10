@@ -34,7 +34,6 @@ jobs:
             platform-tools
             platforms;android-37.0
             build-tools;36.0.0
-            ndk;28.2.13676358
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -71,15 +70,12 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: >-
           ./gradlew
-          :shared:testDebugUnitTest
-          :common:lintDebug
-          :mobile:lintDebug
-          :automotive:lintDebug
-          :mobile:assembleDebug
-          :automotive:assembleDebug
+          :core:testDebugUnitTest
+          :app:lintDebug
+          :app:assembleDebug
           --stacktrace
 
-      - name: Verify signed debug APKs
+      - name: Verify signed debug APK
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
@@ -93,21 +89,18 @@ jobs:
             -storepass "${ANDROID_KEYSTORE_PASSWORD}" \
             -alias "${ANDROID_KEY_ALIAS}" | sha256sum | cut -d ' ' -f 1)"
 
-          for apk in mobile/build/outputs/apk/debug/mobile-debug.apk automotive/build/outputs/apk/debug/automotive-debug.apk; do
-            signer_info="$("${apksigner}" verify --verbose --print-certs "${apk}")"
-            echo "${signer_info}"
-            actual_cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "${signer_info}")"
-            test "${actual_cert,,}" = "${expected_cert,,}"
-          done
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          signer_info="$("${apksigner}" verify --verbose --print-certs "${apk}")"
+          echo "${signer_info}"
+          actual_cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "${signer_info}")"
+          test "${actual_cert,,}" = "${expected_cert,,}"
 
-      - name: Upload signed debug APKs
+      - name: Upload signed debug APK
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apks-${{ github.sha }}
-          path: |
-            mobile/build/outputs/apk/debug/mobile-debug.apk
-            automotive/build/outputs/apk/debug/automotive-debug.apk
+          name: debug-apk-${{ github.sha }}
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
   release:
@@ -134,7 +127,6 @@ jobs:
             platform-tools
             platforms;android-37.0
             build-tools;36.0.0
-            ndk;28.2.13676358
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -170,33 +162,26 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: >-
           ./gradlew
-          :shared:testDebugUnitTest
-          :common:lintRelease
-          :mobile:lintRelease
-          :automotive:lintRelease
-          :automotive:assembleRelease
-          :mobile:assembleRelease
+          :core:testDebugUnitTest
+          :app:lintRelease
+          :app:assembleRelease
           --stacktrace
 
-      - name: Verify and collect signed APKs
+      - name: Verify and collect signed APK
         run: |
           set -euo pipefail
 
           mkdir -p release
           safe_tag="${GITHUB_REF_NAME//\//-}"
-          mobile_apk="$(find mobile/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
-          automotive_apk="$(find automotive/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
-          test -n "${mobile_apk}"
-          test -n "${automotive_apk}"
+          app_apk="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -n "${app_apk}"
 
           apksigner="${ANDROID_HOME}/build-tools/36.0.0/apksigner"
-          "${apksigner}" verify --verbose --print-certs "${mobile_apk}"
-          "${apksigner}" verify --verbose --print-certs "${automotive_apk}"
+          "${apksigner}" verify --verbose --print-certs "${app_apk}"
 
-          cp "${mobile_apk}" "release/xcertplay-mobile-${safe_tag}.apk"
-          cp "${automotive_apk}" "release/xcertplay-automotive-${safe_tag}.apk"
+          cp "${app_apk}" "release/xcertplay-${safe_tag}.apk"
 
-      - name: Upload APKs to the tag release
+      - name: Upload APK to the tag release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
