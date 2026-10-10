@@ -204,32 +204,11 @@ object Iap2WirelessMessages {
     }
 }
 
-/** Typed accessory-authentication bodies, including the BAA certificate package layout. */
+/** Typed accessory-authentication bodies. */
 object Iap2AuthenticationMessages {
     fun accessoryCertificate(certificate: ByteArray): Iap2Frame =
         Iap2Messages.build(Iap2Endpoints.AUTHENTICATION_CERTIFICATE) {
             bytes(0, certificate)
-        }
-
-    /**
-     * Wraps an already encoded 0xAA01 body, as returned by the remote MFi/BAA transport.
-     * The body is parsed before wrapping so malformed parameter framing cannot escape this layer.
-     */
-    fun accessoryCertificateBody(body: ByteArray): Iap2Frame {
-        Iap2ParameterList.parse(body)
-        return Iap2Frame(Iap2Endpoints.AUTHENTICATION_CERTIFICATE.id, body)
-    }
-
-    /**
-     * The remote BAA service returns a package whose three fields are already the final 0xAA01
-     * parameter sequence. It is intentionally built through the raw endpoint wrapper because this
-     * package uses a schema variant that is not represented by the baseline MFi endpoint.
-     */
-    fun baaCertificatePackage(leaf: ByteArray, intermediate: ByteArray): Iap2Frame =
-        Iap2Messages.buildRaw(Iap2Endpoints.AUTHENTICATION_CERTIFICATE.id) {
-            bytes(0, leaf)
-            u8(1, 1)
-            bytes(2, intermediate)
         }
 
     fun response(signature: ByteArray): Iap2Frame =

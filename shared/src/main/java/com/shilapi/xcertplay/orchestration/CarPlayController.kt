@@ -37,9 +37,7 @@ import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import com.shilapi.xcertplay.media.CarPlayMediaSessionBridge
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient
-import com.shilapi.xcertplay.mfi.MfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
-import com.shilapi.xcertplay.mfi.RemoteMfiAuthenticationClient
 import com.shilapi.xcertplay.network.CarPlayBonjour
 import com.shilapi.xcertplay.network.CarPlayVpnService
 import com.shilapi.xcertplay.network.LocalOnlyHotspotManager
@@ -50,10 +48,6 @@ import com.shilapi.xcertplay.network.WirelessHotspotManager
 import com.shilapi.xcertplay.network.mfiCertificateWifiP2pCredentials
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import com.shilapi.xcertplay.transport.BluetoothRfcommDuplexStream
-import com.shilapi.xcertplay.transport.Ch341DeviceMatcher
-import com.shilapi.xcertplay.transport.Ch341I2cTransport
-import com.shilapi.xcertplay.transport.Ch341UsbHost
-import com.shilapi.xcertplay.transport.Ch341UsbSession
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
 import com.shilapi.xcertplay.transport.Iap2LocationProvider
 import com.shilapi.xcertplay.transport.Iap2UsbMuxHost
@@ -65,13 +59,10 @@ import com.shilapi.xcertplay.transport.Iap2WirelessCarPlayEndpoint
 import com.shilapi.xcertplay.transport.Iap2WirelessControlClient
 import com.shilapi.xcertplay.transport.Iap2WirelessControlTerminal
 import com.shilapi.xcertplay.transport.Iap2WirelessIdentification
-import com.shilapi.xcertplay.transport.I2cTransport
-import com.shilapi.xcertplay.transport.I2cTransportException
 import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
 import com.shilapi.xcertplay.transport.IphoneUsbException
 import com.shilapi.xcertplay.transport.IphoneUsbHost
 import com.shilapi.xcertplay.transport.IphoneUsbMatcher
-import com.shilapi.xcertplay.transport.LinuxI2cTransport
 import com.shilapi.xcertplay.transport.LockdownCarKitClient
 import com.shilapi.xcertplay.transport.LockdownPairingClient
 import com.shilapi.xcertplay.transport.LockdownPairRecord
@@ -94,8 +85,6 @@ import java.util.concurrent.atomic.AtomicReference
 
 sealed class CarPlayStatus {
     data object DiscoveringMfi : CarPlayStatus()
-    data object WaitingForMfi : CarPlayStatus()
-    data object RequestingMfiPermission : CarPlayStatus()
     data object MfiReady : CarPlayStatus()
     data object StartingHotspot : CarPlayStatus()
     data class HotspotReady(
@@ -131,10 +120,10 @@ internal fun isWirelessHandoffInProgress(
 ): Boolean = handoffRequested || tunnelActive || sessionActive
 
 /**
- * Wires the complete wired or wireless CarPlay path: MFi coprocessor discovery, iPhone bring-up,
+ * Wires the complete wired or wireless CarPlay path: local MFi document loading, iPhone bring-up,
  * iAP2 control, transport setup, and the AirPlay media/input sessions.
  *
- * All blocking USB/I2C work runs on one worker executor. Status callbacks are delivered on the
+ * All blocking document and USB work runs on one worker executor. Status callbacks are delivered on the
  * main thread. This class is the integration seam only and is not evidence of hardware operation.
  */
 class CarPlayController(
@@ -186,12 +175,9 @@ class CarPlayController(
     private var permissionPollGeneration = 0
     private var reenumerationAttempts = 0
     private var lastReportedStatus: CarPlayStatus? = null
-    private var mfiResetLogged = false
-
     @Volatile private var closed = false
     @Volatile private var phase = Phase.IDLE
-    @Volatile private var ch341Host: Ch341UsbHost? = null
-    @Volatile private var mfiSession: MfiSession? = null
+    @Volatile private var mfiAuthenticator: MfiAuthenticator? = null
     @Volatile private var mux: Iap2UsbMuxHost? = null
     @Volatile private var csm: Iap2Session? = null
     @Volatile private var activeSession: AirPlaySession? = null
@@ -214,7 +200,6 @@ class CarPlayController(
 
     private var permissionCloseable: Closeable? = null
     private var attachCloseable: Closeable? = null
-    private var ch341PermissionCloseable: Closeable? = null
     private var vpnLatch = CountDownLatch(1)
     private val teardownComplete = CountDownLatch(1)
 
@@ -318,17 +303,17 @@ class CarPlayController(
         startMfi()
     }
 
-    /** Reopens the CH341/MFi path without restarting the app. */
+    /** Reloads the local MFi documents without restarting the app. */
     fun reconnectMfi() = synchronized(lifecycleLock) {
         if (closed) return
-        closeMfiSession()
+        mfiAuthenticator = null
         startMfi()
     }
 
     /** Re-runs iPhone discovery/bring-up using the already-open MFi session. */
     fun reconnectIphone() = synchronized(lifecycleLock) {
         if (closed) return
-        if (mfiSession == null) {
+        if (mfiAuthenticator == null) {
             startMfi()
         } else if (config.transport == CarPlayTransport.WIRELESS) {
             restartWireless()
@@ -459,8 +444,7 @@ class CarPlayController(
                     if (config.transport == CarPlayTransport.WIRED) {
                         closeBestEffort("VPN/NCM") { service?.detach() }
                     }
-                    closeBestEffort("MFi") { mfiSession?.close() }
-                    mfiSession = null
+                    mfiAuthenticator = null
                     wirelessIdentification = null
                     wirelessAirPlayEndpoint = null
                     closeBestEffort("location provider") { locationProvider?.close() }
@@ -496,40 +480,16 @@ class CarPlayController(
         availabilityPollGeneration.incrementAndGet()
         phase = Phase.MFI
         onStatus(CarPlayStatus.DiscoveringMfi)
-        when (config.mfiTarget) {
-            MfiTarget.USB_CH341 -> {
-                debugLog("mfi discovery backend=CH341 devices=${config.ch341Devices}")
-                val host = ch341Host ?: Ch341UsbHost(
-                    appContext,
-                    usbManager,
-                    Ch341DeviceMatcher(config.ch341Devices),
-                ).also {
-                    ch341Host = it
-                    ch341PermissionCloseable = it.registerPermissionReceiver(::onCh341Permission)
-                }
-                checkCh341Mfi(host)
-            }
-            MfiTarget.I2C -> {
-                debugLog("mfi discovery backend=Linux I2C path=${config.linuxI2cPath}")
-                openLinuxMfi()
-            }
-            MfiTarget.REMOTE -> {
-                debugLog("mfi discovery backend=Remote server=${config.remoteMfiServer.orEmpty()}")
-                openRemoteMfi()
-            }
-            MfiTarget.LOCAL_FILES -> {
-                debugLog("mfi discovery backend=Local documents")
-                openLocalMfi()
-            }
-        }
+        debugLog("mfi discovery backend=Local documents")
+        openLocalMfi()
     }
 
     private fun openLocalMfi() {
         executor.execute {
             try {
                 val resolver = appContext.contentResolver
-                val certificateUri = Uri.parse(checkNotNull(config.localMfiCertificateUri))
-                val privateKeyUri = Uri.parse(checkNotNull(config.localMfiPrivateKeyUri))
+                val certificateUri = Uri.parse(config.localMfiCertificateUri)
+                val privateKeyUri = Uri.parse(config.localMfiPrivateKeyUri)
                 val client = resolver.openInputStream(certificateUri)?.use { certificateInput ->
                     resolver.openInputStream(privateKeyUri)?.use { privateKeyInput ->
                         LocalMfiAuthenticationClient.load(certificateInput, privateKeyInput)
@@ -537,269 +497,12 @@ class CarPlayController(
                 } ?: throw IOException("Could not open the selected local MFi certificate")
                 val protocolMajor = client.protocolMajor()
                 if (closed || phase != Phase.MFI) return@execute
-                mfiSession = MfiSession(client, null)
+                mfiAuthenticator = client
                 debugLog("mfi local documents ready protocolMajor=$protocolMajor")
                 onStatus(CarPlayStatus.MfiReady)
                 startPhone()
             } catch (error: Throwable) {
                 fail(error)
-            }
-        }
-    }
-
-    private fun openRemoteMfi() {
-        executor.execute {
-            try {
-                val client = RemoteMfiAuthenticationClient(
-                    serverAddress = checkNotNull(config.remoteMfiServer),
-                    token = config.remoteMfiToken,
-                )
-                client.reset()
-                val protocolMajor = client.protocolMajor()
-                if (closed || phase != Phase.MFI) return@execute
-                mfiSession = MfiSession(client, null)
-                debugLog(
-                    "mfi remote service ready server=${config.remoteMfiServer} " +
-                        "protocolMajor=$protocolMajor",
-                )
-                onStatus(CarPlayStatus.MfiReady)
-                startPhone()
-            } catch (error: Throwable) {
-                fail(error)
-            }
-        }
-    }
-
-    private fun checkCh341Mfi(host: Ch341UsbHost) {
-        if (closed || phase != Phase.MFI) return
-        val device = host.discover().firstOrNull()
-        if (device == null) {
-            waitForMfi()
-        } else {
-            availabilityPollGeneration.incrementAndGet()
-            requestCh341Permission(device)
-        }
-    }
-
-    private fun openLinuxMfi() {
-        executor.execute {
-            try {
-                val transport = LinuxI2cTransport.open(config.linuxI2cPath!!)
-                try {
-                    mfiSession = MfiSession(MfiRuntime.scan(transport), transport)
-                    debugLog("mfi Linux I2C coprocessor ready path=${config.linuxI2cPath}")
-                    onStatus(CarPlayStatus.MfiReady)
-                    startPhone()
-                } catch (error: Throwable) {
-                    transport.close()
-                    throw error
-                }
-            } catch (error: MfiCoprocessorNotFoundException) {
-                debugLog("mfi Linux discovery failed: ${error.message}")
-                waitForMfi()
-            } catch (error: Throwable) {
-                fail(error)
-            }
-        }
-    }
-
-    private fun requestCh341Permission(device: UsbDevice) {
-        try {
-            when (val request = ch341Host!!.requestPermission(device)) {
-                is Ch341UsbHost.PermissionRequest.AlreadyGranted -> {
-                    permissionGrant.set(false)
-                    onCh341Permission(Ch341UsbHost.PermissionResult.Granted(request.device))
-                }
-                is Ch341UsbHost.PermissionRequest.Requested -> {
-                    permissionGrant.set(false)
-                    onStatus(CarPlayStatus.RequestingMfiPermission)
-                    pollCh341Permission(device)
-                }
-            }
-        } catch (error: Throwable) {
-            fail(error)
-        }
-    }
-
-    private fun onCh341Permission(result: Ch341UsbHost.PermissionResult) {
-        if (closed || phase != Phase.MFI) return
-        when (result) {
-            is Ch341UsbHost.PermissionResult.Granted -> {
-                // The system broadcast and CarUsbHandler's direct grant can both observe success.
-                if (!permissionGrant.compareAndSet(false, true)) return
-                permissionPollGeneration++
-                openCh341(result.device)
-            }
-            is Ch341UsbHost.PermissionResult.Denied -> {
-                permissionGrant.set(true)
-                onStatus(CarPlayStatus.Failed("CH341 USB permission was denied"))
-            }
-        }
-    }
-
-    /** Some car systems grant USB access through CarUsbHandler without delivering a broadcast. */
-    private fun pollCh341Permission(device: UsbDevice) {
-        val generation = ++permissionPollGeneration
-        val deadlineNanos = System.nanoTime() + PERMISSION_POLL_TIMEOUT_MILLIS * 1_000_000L
-        val check = object : Runnable {
-            override fun run() {
-                if (closed || phase != Phase.MFI || generation != permissionPollGeneration) return
-                if (usbManager.hasPermission(device)) {
-                    onCh341Permission(Ch341UsbHost.PermissionResult.Granted(device))
-                    return
-                }
-                if (System.nanoTime() >= deadlineNanos) {
-                    if (permissionGrant.compareAndSet(false, true)) {
-                        onStatus(
-                            CarPlayStatus.Failed(
-                                "MFi USB permission was not granted; reconnect the CH341 to retry",
-                            ),
-                        )
-                    }
-                    return
-                }
-                mainHandler.postDelayed(this, PERMISSION_POLL_INTERVAL_MILLIS)
-            }
-        }
-        mainHandler.postDelayed(check, PERMISSION_POLL_INTERVAL_MILLIS)
-    }
-
-    private fun openCh341(device: UsbDevice) {
-        ch341Host!!.openAsync(device, executor) { result ->
-            when (result) {
-                is Ch341UsbHost.OpenResult.Connected -> {
-                    val session: Ch341UsbSession = result.session
-                    if (closed || phase != Phase.MFI) {
-                        session.close()
-                        return@openAsync
-                    }
-                    try {
-                        val transport = Ch341I2cTransport(session)
-                        config.ch341MfiResetGpio?.let { gpio ->
-                            transport.pulseActiveLowReset(gpio)
-                            if (!mfiResetLogged) {
-                                mfiResetLogged = true
-                                debugLog("mfi reset pulse gpio=D$gpio mode=low/high-z")
-                            }
-                        }
-                        val client = MfiRuntime.scan(transport)
-                        val probes = mfiCandidateAddresses
-                            .associateWith { address -> probeMfiCandidate(transport, address) }
-                        for ((address, probe) in probes) {
-                            debugLog("mfi probe address=0x${address.toString(16)} ${probe.describe()}")
-                        }
-                        val selected = preferCertificateBearingAddress(client, transport, probes)
-                        debugLog(
-                            "mfi coprocessor address=0x${selected.address7Bit.toString(16)} " +
-                                "protocolMajor=${selected.protocolMajor()}",
-                        )
-                        mfiSession = MfiSession(selected, session)
-                        debugLog("mfi CH341 session ready")
-                        onStatus(CarPlayStatus.MfiReady)
-                        startPhone()
-                    } catch (error: MfiCoprocessorNotFoundException) {
-                        debugLog("mfi CH341 discovery failed: ${error.message}")
-                        Log.w(IphoneCarPlayConfiguration.TAG, error.message ?: "MFi discovery failed")
-                        session.close()
-                        waitForMfi()
-                    } catch (error: Throwable) {
-                        session.close()
-                        fail(error)
-                    }
-                }
-                is Ch341UsbHost.OpenResult.Failed -> when (result.error) {
-                    is I2cTransportException.DeviceUnavailable -> waitForMfi()
-                    else -> fail(result.error)
-                }
-            }
-        }
-    }
-
-    private val mfiCandidateAddresses = listOf(0x10, 0x11)
-    private val maxMfiCertificateBytes = 1280
-
-    private data class MfiCandidateProbe(
-        val deviceVersion: Int?,
-        val firmwareVersion: Int?,
-        val protocolMajor: Int?,
-        val accessoryCertificateLength: Int?,
-        val appleCertificateLength: Int?,
-        val failure: String?,
-    ) {
-        val hasAccessoryCertificate: Boolean
-            get() = (accessoryCertificateLength ?: 0) in 1..1280
-
-        fun describe(): String {
-            if (failure != null) return failure
-            return "deviceVersion=" + hex(deviceVersion) +
-                " firmwareVersion=" + hex(firmwareVersion) +
-                " protocolMajor=" + hex(protocolMajor) +
-                " accessoryCertificateLength=" + accessoryCertificateLength +
-                " appleCertificateLength=" + appleCertificateLength
-        }
-
-        private fun hex(value: Int?): String =
-            if (value == null) "?" else "0x" + value.toString(16).padStart(2, '0')
-    }
-
-    private fun probeMfiCandidate(transport: I2cTransport, address7Bit: Int): MfiCandidateProbe = try {
-        MfiCandidateProbe(
-            deviceVersion = readMfiRegister(transport, address7Bit, 0x00, 1),
-            firmwareVersion = readMfiRegister(transport, address7Bit, 0x01, 1),
-            protocolMajor = readMfiRegister(transport, address7Bit, 0x02, 1),
-            accessoryCertificateLength = readMfiRegister(transport, address7Bit, 0x30, 2),
-            appleCertificateLength = readMfiRegister(transport, address7Bit, 0x50, 2),
-            failure = null,
-        )
-    } catch (error: Throwable) {
-        MfiCandidateProbe(
-            deviceVersion = null,
-            firmwareVersion = null,
-            protocolMajor = null,
-            accessoryCertificateLength = null,
-            appleCertificateLength = null,
-            failure = "failed: " + error.javaClass.simpleName + ": " + error.message,
-        )
-    }
-
-    private fun readMfiRegister(
-        transport: I2cTransport,
-        address7Bit: Int,
-        register: Int,
-        length: Int,
-    ): Int {
-        transport.transaction(address7Bit, byteArrayOf(register.toByte()), 0)
-        var value = 0
-        for (byte in transport.transaction(address7Bit, ByteArray(0), length)) {
-            value = (value shl 8) or (byte.toInt() and 0xff)
-        }
-        return value
-    }
-
-    private fun preferCertificateBearingAddress(
-        client: MfiAuthenticationClient,
-        transport: I2cTransport,
-        probes: Map<Int, MfiCandidateProbe>,
-    ): MfiAuthenticationClient {
-        if (probes[client.address7Bit]?.hasAccessoryCertificate == true) return client
-        val alternative = probes.entries.firstOrNull { (address, probe) ->
-            address != client.address7Bit && probe.hasAccessoryCertificate
-        } ?: return client
-        debugLog(
-            "mfi address override: 0x" + client.address7Bit.toString(16) +
-                " has no accessory certificate; using 0x" + alternative.key.toString(16),
-        )
-        return MfiAuthenticationClient(transport, alternative.key)
-    }
-
-    private fun waitForMfi() {
-        if (closed || phase != Phase.MFI) return
-        onStatus(CarPlayStatus.WaitingForMfi)
-        scheduleAvailabilityPoll(Phase.MFI) {
-            when (config.mfiTarget) {
-                MfiTarget.USB_CH341 -> ch341Host?.let(::checkCh341Mfi)
-                MfiTarget.I2C -> openLinuxMfi()
-                MfiTarget.REMOTE, MfiTarget.LOCAL_FILES -> Unit
             }
         }
     }
@@ -864,7 +567,7 @@ class CarPlayController(
                 return
             }
 
-            val mfi = mfiSession?.client
+            val mfi = mfiAuthenticator
                 ?: throw IOException("MFi coprocessor client is unavailable")
             val hotspotInfo = startWirelessHotspot(generation, mfi)
             if (isStaleWirelessRun(generation)) {
@@ -1053,7 +756,7 @@ class CarPlayController(
         if (closed || config.transport != CarPlayTransport.WIRELESS) return false
         val identification = wirelessIdentification ?: return false
         val endpoint = wirelessAirPlayEndpoint ?: return false
-        val mfi = mfiSession?.client ?: return false
+        val mfi = mfiAuthenticator ?: return false
         debugLog("wireless type-130 tunnel data stream accepted")
         val channel = try {
             Iap2Session.openTunnel(
@@ -1425,7 +1128,7 @@ class CarPlayController(
                 return
             }
 
-            val mfi = mfiSession?.client
+            val mfi = mfiAuthenticator
                 ?: throw IphoneUsbException.DeviceUnavailable("MFi coprocessor client is unavailable")
             val endpoint = Iap2WiredCarPlayEndpoint(
                 ipv6Addresses = listOf(config.linkLocal),
@@ -1777,7 +1480,7 @@ class CarPlayController(
                 config = airPlayConfig,
                 identity = identity,
                 pairings = pairings,
-                mfi = mfiSession?.client,
+                mfi = mfiAuthenticator,
                 listener = sessionListener,
                 media = media,
             )
@@ -1846,7 +1549,7 @@ class CarPlayController(
     }
 
     private fun closeReceivers() {
-        listOfNotNull(permissionCloseable, attachCloseable, ch341PermissionCloseable).forEach {
+        listOfNotNull(permissionCloseable, attachCloseable).forEach {
             try {
                 it.close()
             } catch (_: Exception) {
@@ -1855,21 +1558,6 @@ class CarPlayController(
         }
         permissionCloseable = null
         attachCloseable = null
-        ch341PermissionCloseable = null
-    }
-
-    private fun closeMfiSession() {
-        val session = mfiSession
-        mfiSession = null
-        if (session != null) {
-            executor.execute {
-                try {
-                    session.close()
-                } catch (_: Exception) {
-                    // Best effort.
-                }
-            }
-        }
     }
 
     private fun fail(error: Throwable) {
@@ -1910,11 +1598,7 @@ class CarPlayController(
 
     private fun CarPlayStatus.debugLogMessage(): String = when (this) {
         CarPlayStatus.DiscoveringMfi ->
-            "STEP mfi/start: preparing the configured MFi authentication provider"
-        CarPlayStatus.WaitingForMfi ->
-            "STEP mfi/wait: MFi coprocessor not present; polling"
-        CarPlayStatus.RequestingMfiPermission ->
-            "STEP mfi/permission: requesting CH341 USB access"
+            "STEP mfi/start: loading local MFi documents"
         CarPlayStatus.MfiReady ->
             "STEP mfi/ready: MFi authentication provider is ready"
         CarPlayStatus.StartingHotspot ->

@@ -8,9 +8,9 @@ import androidx.car.app.model.Template
 
 class MyCarAppScreen(carContext: CarContext) : Screen(carContext) {
     override fun onGetTemplate(): Template {
-        return MessageTemplate.Builder("Hardware transport is not configured. Board I2C needs a /dev/i2c-N path and OS/SELinux permission; CH341 needs deployed VID/PID configuration.")
+        return MessageTemplate.Builder("Select a local MFi certificate and private key in the host app settings.")
             .setHeaderAction(Action.APP_ICON)
-            .setTitle("xcertplay hardware status")
+            .setTitle("xcertplay MFi status")
             .build()
     }
 }

@@ -7,7 +7,7 @@ import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 /** Runs LIVI's minimal iAP2 CSM MFi exchange without taking ownership of [Iap2Session]. */
 class Iap2MfiAuthenticationClient(
     private val authentication: MfiAuthenticator,
-    private val maximumCertificateLength: Int = MfiAuthenticationClient.DEFAULT_MAXIMUM_CERTIFICATE_OUTPUT_LENGTH,
+    private val maximumCertificateLength: Int = MfiAuthenticator.DEFAULT_MAXIMUM_CERTIFICATE_OUTPUT_LENGTH,
 ) {
     init {
         require(maximumCertificateLength in 1..MAX_CSM_CERTIFICATE_BYTES) {
@@ -26,14 +26,10 @@ class Iap2MfiAuthenticationClient(
         }
         val deadlineNanos = deadlineAfter(timeoutMillis)
         val certificate = authentication.readCertificate(maximumCertificateLength)
-        val certificateFrame = when (authentication.certificateType) {
-            MfiCertificateType.MFI -> Iap2AuthenticationMessages.accessoryCertificate(certificate)
-            MfiCertificateType.BAA -> Iap2AuthenticationMessages.accessoryCertificateBody(certificate)
-        }
+        val certificateFrame = Iap2AuthenticationMessages.accessoryCertificate(certificate)
         val certificatePayloadBytes = certificateFrame.payload.size
         onProgress(
-            "mfi type=${authentication.certificateType} " +
-                "certificate loaded bytes=${certificate.size} " +
+            "mfi certificate loaded bytes=${certificate.size} " +
                 "payload bytes=$certificatePayloadBytes",
         )
         while (true) {

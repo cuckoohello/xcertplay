@@ -1,7 +1,6 @@
 package com.shilapi.xcertplay.airplay
 
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
-import com.shilapi.xcertplay.mfi.MfiCertificateType
 import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
@@ -33,37 +32,18 @@ object MfiSapAuthSetup {
         val aesKey = sha1("AES-KEY".asciiBytes(), shared).copyOf(16)
         val aesIv = sha1("AES-IV".asciiBytes(), shared).copyOf(16)
 
-        return when (mfi.certificateType) {
-            MfiCertificateType.MFI -> {
-                val certificate = mfi.readCertificate()
-                val digest = if (mfi.protocolMajor() == 2) {
-                    sha1(pair.publicKey, peerPublicKey)
-                } else {
-                    sha256(pair.publicKey, peerPublicKey)
-                }
-                val encryptedSignature = aesCtr128(
-                    aesKey,
-                    aesIv,
-                    mfi.signChallenge(digest),
-                )
-                buildMfiResponse(pair.publicKey, certificate, encryptedSignature)
-            }
-
-            MfiCertificateType.BAA -> {
-                val certificates = mfi.baaCertificates()
-                val encryptedSignature = aesCtr128(
-                    aesKey,
-                    aesIv,
-                    mfi.signChallenge(pair.publicKey + peerPublicKey),
-                )
-                buildBaaResponse(
-                    pair.publicKey,
-                    certificates.leaf,
-                    encryptedSignature,
-                    encodeBaaIntermediate(certificates.intermediate),
-                )
-            }
+        val certificate = mfi.readCertificate()
+        val digest = if (mfi.protocolMajor() == 2) {
+            sha1(pair.publicKey, peerPublicKey)
+        } else {
+            sha256(pair.publicKey, peerPublicKey)
         }
+        val encryptedSignature = aesCtr128(
+            aesKey,
+            aesIv,
+            mfi.signChallenge(digest),
+        )
+        return buildMfiResponse(pair.publicKey, certificate, encryptedSignature)
     }
 
     private fun buildMfiResponse(
@@ -78,84 +58,6 @@ object MfiSapAuthSetup {
         putU32(response, 36 + certificate.size, encryptedSignature.size)
         encryptedSignature.copyInto(response, 40 + certificate.size)
         return response
-    }
-
-    private fun buildBaaResponse(
-        publicKey: ByteArray,
-        leaf: ByteArray,
-        encryptedSignature: ByteArray,
-        baicBlob: ByteArray,
-    ): ByteArray {
-        val response = ByteArray(
-            32 + 4 + leaf.size + 4 + encryptedSignature.size + 4 + baicBlob.size,
-        )
-        publicKey.copyInto(response, 0)
-        var offset = 32
-        putU32(response, offset, leaf.size)
-        offset += 4
-        leaf.copyInto(response, offset)
-        offset += leaf.size
-        putU32(response, offset, encryptedSignature.size)
-        offset += 4
-        encryptedSignature.copyInto(response, offset)
-        offset += encryptedSignature.size
-        putU32(response, offset, baicBlob.size)
-        offset += 4
-        baicBlob.copyInto(response, offset)
-        return response
-    }
-
-    /** OPACK `{"baIC": intermediate}` used by Showcase and CarPlay Simulator. */
-    private fun encodeBaaIntermediate(intermediate: ByteArray): ByteArray {
-        val header = when {
-            intermediate.size <= 0x20 -> byteArrayOf(
-                0xE1.toByte(),
-                0x44,
-                'b'.code.toByte(),
-                'a'.code.toByte(),
-                'I'.code.toByte(),
-                'C'.code.toByte(),
-                (0x70 + intermediate.size).toByte(),
-            )
-
-            intermediate.size <= 0xFF -> byteArrayOf(
-                0xE1.toByte(),
-                0x44,
-                'b'.code.toByte(),
-                'a'.code.toByte(),
-                'I'.code.toByte(),
-                'C'.code.toByte(),
-                0x91.toByte(),
-                intermediate.size.toByte(),
-            )
-
-            intermediate.size <= 0xFFFF -> byteArrayOf(
-                0xE1.toByte(),
-                0x44,
-                'b'.code.toByte(),
-                'a'.code.toByte(),
-                'I'.code.toByte(),
-                'C'.code.toByte(),
-                0x92.toByte(),
-                intermediate.size.toByte(),
-                (intermediate.size ushr 8).toByte(),
-            )
-
-            else -> byteArrayOf(
-                0xE1.toByte(),
-                0x44,
-                'b'.code.toByte(),
-                'a'.code.toByte(),
-                'I'.code.toByte(),
-                'C'.code.toByte(),
-                0x93.toByte(),
-                intermediate.size.toByte(),
-                (intermediate.size ushr 8).toByte(),
-                (intermediate.size ushr 16).toByte(),
-                (intermediate.size ushr 24).toByte(),
-            )
-        }
-        return header + intermediate
     }
 
     private fun sha1(vararg parts: ByteArray): ByteArray = digest("SHA-1", parts)

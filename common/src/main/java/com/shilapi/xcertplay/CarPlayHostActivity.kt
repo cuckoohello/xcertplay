@@ -79,12 +79,10 @@ import com.shilapi.xcertplay.orchestration.CarPlayStatus
 import com.shilapi.xcertplay.orchestration.CarPlayTransport
 import com.shilapi.xcertplay.orchestration.ManualHotspotBand
 import com.shilapi.xcertplay.orchestration.ManualHotspotSecurity
-import com.shilapi.xcertplay.orchestration.MfiTarget
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
 import com.shilapi.xcertplay.orchestration.isManualHotspotChannelCompatible
 import com.shilapi.xcertplay.transport.Iap2IdentificationConfig
 import com.shilapi.xcertplay.transport.Iap2LocationProvider
-import com.shilapi.xcertplay.transport.UsbDeviceId
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -99,7 +97,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * the active AirPlay session, and drives the complete wired or wireless bring-up through
  * [CarPlayController].
  *
- * Apple devices are discovered by vendor ID; CH341 uses the configured VID/PID below.
+ * Apple devices are discovered by vendor ID.
  */
 class CarPlayHostActivity : ComponentActivity() {
     private data class SettingsBaseline(
@@ -110,25 +108,13 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private lateinit var airPlayIdentity: AirPlayIdentity
 
-    // CH341 USB\VID_1A86&PID_5512&REV_0304 is the deployment-supplied bridge identity.
     private fun createRuntimeConfig(): CarPlayRuntimeConfig = CarPlayRuntimeConfig(
-        mfiTarget = mfiTarget,
-        ch341Devices = if (mfiTarget == MfiTarget.USB_CH341) {
-            listOf(UsbDeviceId(0x1a86, 0x5512))
-        } else {
-            emptyList()
-        },
-        // The CP latches its I2C address from the RST level at its own power-up, so the host must
-        // not pulse RST before discovery. Driving D0 re-latches the part onto the alternate
-        // address (0x10), where the accessory certificate is not readable. Leave RST at its
-        // hardware pull (VCC -> 0x11) and let the scanner find the part with its certificate.
-        // Set this back to 0 to restore the D0 pulse.
-        ch341MfiResetGpio = null,
-        linuxI2cPath = if (mfiTarget == MfiTarget.I2C) mfiI2cPath.trim() else null,
-        remoteMfiServer = remoteMfiServer.trim().takeIf { it.isNotEmpty() },
-        remoteMfiToken = remoteMfiToken.takeIf { it.isNotEmpty() },
-        localMfiCertificateUri = localMfiCertificateUri.takeIf { it.isNotEmpty() },
-        localMfiPrivateKeyUri = localMfiPrivateKeyUri.takeIf { it.isNotEmpty() },
+        localMfiCertificateUri = checkNotNull(
+            localMfiCertificateUri.takeIf { it.isNotBlank() },
+        ),
+        localMfiPrivateKeyUri = checkNotNull(
+            localMfiPrivateKeyUri.takeIf { it.isNotBlank() },
+        ),
         identification = Iap2IdentificationConfig(
             name = "xcertplay",
             modelIdentifier = normalizedModel(),
@@ -256,14 +242,7 @@ class CarPlayHostActivity : ComponentActivity() {
     private var gestureOverlay: View? = null
     private var disconnectedSettingsButton: View? = null
     private var settingsMenu: View? = null
-    private var mfiTargetGroup: RadioGroup? = null
-    private var mfiI2cFields: View? = null
-    private var mfiRemoteFields: View? = null
-    private var mfiLocalFields: View? = null
     private var mfiErrorView: TextView? = null
-    private var mfiI2cPathInput: EditText? = null
-    private var remoteMfiServerInput: EditText? = null
-    private var remoteMfiTokenInput: EditText? = null
     private var localMfiCertificateDocumentView: TextView? = null
     private var localMfiPrivateKeyDocumentView: TextView? = null
     private var settingsBaseline: SettingsBaseline? = null
@@ -330,10 +309,6 @@ class CarPlayHostActivity : ComponentActivity() {
     private var microphonePermissionResolved = false
     @Volatile private var microphoneGainPercent = MicrophoneGain.DEFAULT_PERCENT
     private var wirelessEnabled = false
-    private var mfiTarget = MfiTarget.USB_CH341
-    private var mfiI2cPath = AirPlayPersistence.DEFAULT_MFI_I2C_PATH
-    private var remoteMfiServer = ""
-    private var remoteMfiToken = ""
     private var localMfiCertificateUri = ""
     private var localMfiPrivateKeyUri = ""
     private var wirelessPermissionsReady = false
@@ -465,7 +440,7 @@ class CarPlayHostActivity : ComponentActivity() {
         )
 
         appendLog(
-            "Host started; MFI target=${mfiTargetLabel(mfiTarget)}; " +
+            "Host started; MFI target=Local files; " +
                 "transport=${if (wirelessEnabled) "wireless" else "wired"}",
         )
         val reusedBackgroundSession = adoptBackgroundSession()
@@ -515,10 +490,7 @@ class CarPlayHostActivity : ComponentActivity() {
         locationReportingEnabled = AirPlayPersistence.loadLocationReportingEnabled(this)
         locationPermissionAvailable = hasFineLocationPermission()
         wirelessEnabled = AirPlayPersistence.loadWirelessEnabled(this)
-        mfiTarget = AirPlayPersistence.loadMfiTarget(this)
-        mfiI2cPath = AirPlayPersistence.loadMfiI2cPath(this)
-        remoteMfiServer = AirPlayPersistence.loadRemoteMfiServer(this)
-        remoteMfiToken = AirPlayPersistence.loadRemoteMfiToken(this)
+        AirPlayPersistence.clearDeprecatedMfiAuthenticationSettings(this)
         localMfiCertificateUri = AirPlayPersistence.loadLocalMfiCertificateUri(this)
         localMfiPrivateKeyUri = AirPlayPersistence.loadLocalMfiPrivateKeyUri(this)
         wirelessHotspotMode = AirPlayPersistence.loadWirelessHotspotMode(this)
@@ -1466,10 +1438,6 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private fun persistMenuSettings() {
         AirPlayPersistence.saveWirelessEnabled(this, wirelessEnabled)
-        AirPlayPersistence.saveMfiTarget(this, mfiTarget)
-        AirPlayPersistence.saveMfiI2cPath(this, mfiI2cPath)
-        AirPlayPersistence.saveRemoteMfiServer(this, remoteMfiServer)
-        AirPlayPersistence.saveRemoteMfiToken(this, remoteMfiToken)
         AirPlayPersistence.saveLocalMfiCertificateUri(this, localMfiCertificateUri)
         AirPlayPersistence.saveLocalMfiPrivateKeyUri(this, localMfiPrivateKeyUri)
         AirPlayPersistence.saveWirelessHotspotMode(this, wirelessHotspotMode)
@@ -1568,113 +1536,13 @@ class CarPlayHostActivity : ComponentActivity() {
         val section = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
-        val targetChoice = settingsChoiceRow(
-            label = "MFI certificate & signing target",
-            options = listOf(
-                MfiTarget.USB_CH341 to "USB/CH341",
-                MfiTarget.I2C to "I2C",
-                MfiTarget.REMOTE to "Remote",
-                MfiTarget.LOCAL_FILES to "Local files",
-            ),
-            selected = mfiTarget,
-        ) { target ->
-            if (mfiTarget == target) return@settingsChoiceRow
-            mfiTarget = target
-            updateMfiTargetFields()
-            appendLog("MFI target: ${mfiTargetLabel(target)}; applies when settings close")
-        }
-        mfiTargetGroup = (targetChoice as ViewGroup).getChildAt(1) as RadioGroup
         section.addView(
-            targetChoice,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-
-        val i2cFields = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(
-                settingsInputRow(
-                    "I2C device",
-                    mfiI2cPath,
-                    onInputCreated = { mfiI2cPathInput = it },
-                ) { value ->
-                    mfiI2cPath = value
-                    mfiErrorView?.visibility = View.GONE
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-            addView(
-                menuText("Linux device path, for example /dev/i2c-1.", 14f, MENU_SECONDARY),
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(4) },
-            )
-        }
-        section.addView(
-            i2cFields,
+            menuText("MFI certificate & signing", 20f, MENU_SECONDARY),
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = dp(8) },
         )
-        mfiI2cFields = i2cFields
-
-        val remoteFields = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(
-                settingsInputRow(
-                    "Server address",
-                    remoteMfiServer,
-                    onInputCreated = { remoteMfiServerInput = it },
-                ) { value ->
-                    remoteMfiServer = value
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-            addView(
-                settingsInputRow(
-                    "Token (optional)",
-                    remoteMfiToken,
-                    password = true,
-                    onInputCreated = { remoteMfiTokenInput = it },
-                ) { value ->
-                    remoteMfiToken = value
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(8) },
-            )
-            addView(
-                menuText(
-                    "Address must start with http:// or https://. Token is optional and sent " +
-                        "as an Authorization bearer token.",
-                    14f,
-                    MENU_SECONDARY,
-                ),
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(4) },
-            )
-        }
-        section.addView(
-            remoteFields,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(8) },
-        )
-        mfiRemoteFields = remoteFields
 
         val localFields = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1726,7 +1594,6 @@ class CarPlayHostActivity : ComponentActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = dp(8) },
         )
-        mfiLocalFields = localFields
         val error = menuText("", 14f, MENU_DANGER).apply {
             visibility = View.GONE
         }
@@ -1738,15 +1605,7 @@ class CarPlayHostActivity : ComponentActivity() {
             ).apply { topMargin = dp(6) },
         )
         mfiErrorView = error
-        updateMfiTargetFields()
         return section
-    }
-
-    private fun updateMfiTargetFields() {
-        mfiI2cFields?.visibility = if (mfiTarget == MfiTarget.I2C) View.VISIBLE else View.GONE
-        mfiRemoteFields?.visibility = if (mfiTarget == MfiTarget.REMOTE) View.VISIBLE else View.GONE
-        mfiLocalFields?.visibility = if (mfiTarget == MfiTarget.LOCAL_FILES) View.VISIBLE else View.GONE
-        mfiErrorView?.visibility = View.GONE
     }
 
     private fun localMfiDocumentRow(
@@ -1837,31 +1696,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     private fun syncMfiSettingsControls() {
-        mfiTargetGroup?.let { group ->
-            val button = (0 until group.childCount)
-                .map { group.getChildAt(it) }
-                .filterIsInstance<RadioButton>()
-                .firstOrNull { it.tag == mfiTarget }
-            button?.let { group.check(it.id) }
-        }
-        if (mfiI2cPathInput?.text?.toString() != mfiI2cPath) {
-            mfiI2cPathInput?.setText(mfiI2cPath)
-        }
-        if (remoteMfiServerInput?.text?.toString() != remoteMfiServer) {
-            remoteMfiServerInput?.setText(remoteMfiServer)
-        }
-        if (remoteMfiTokenInput?.text?.toString() != remoteMfiToken) {
-            remoteMfiTokenInput?.setText(remoteMfiToken)
-        }
         updateLocalMfiDocumentViews()
-        updateMfiTargetFields()
-    }
-
-    private fun mfiTargetLabel(target: MfiTarget): String = when (target) {
-        MfiTarget.USB_CH341 -> "USB/CH341"
-        MfiTarget.I2C -> "I2C"
-        MfiTarget.REMOTE -> "Remote"
-        MfiTarget.LOCAL_FILES -> "Local files"
     }
 
     private fun buildIdentitySettingsSection(): View {
@@ -2902,21 +2737,10 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private fun validateMfiSettings(): Boolean {
         val error = when {
-            mfiTarget == MfiTarget.I2C && mfiI2cPath.isBlank() ->
-                "I2C device path is required"
-            mfiTarget == MfiTarget.REMOTE && remoteMfiServer.isBlank() ->
-                "Remote server address is required"
-            mfiTarget == MfiTarget.REMOTE &&
-                !remoteMfiServer.trim().startsWith("http://") &&
-                !remoteMfiServer.trim().startsWith("https://") ->
-                "Remote server address must start with http:// or https://"
-            mfiTarget == MfiTarget.LOCAL_FILES && localMfiCertificateUri.isBlank() ->
+            localMfiCertificateUri.isBlank() ->
                 "Select a local certificate"
-            mfiTarget == MfiTarget.LOCAL_FILES && localMfiPrivateKeyUri.isBlank() ->
+            localMfiPrivateKeyUri.isBlank() ->
                 "Select a local private key"
-            '\u0000' in mfiI2cPath -> "I2C device path contains U+0000"
-            '\u0000' in remoteMfiServer -> "Remote server address contains U+0000"
-            '\u0000' in remoteMfiToken -> "Remote token contains U+0000"
             '\u0000' in localMfiCertificateUri -> "Local certificate URI contains U+0000"
             '\u0000' in localMfiPrivateKeyUri -> "Local private key URI contains U+0000"
             else -> null
@@ -3476,7 +3300,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 "decoder=${if (airPlayConfig.hevc && hevcSoftwareDecoderEnabled) "software" else "hardware"} " +
                 "microphone=${airPlayConfig.microphone} " +
                 "location=${if (config.locationReportingEnabled) "enabled" else "disabled"} " +
-                "mfi=${mfiTargetLabel(config.mfiTarget)}",
+                "mfi=Local files",
         )
         Log.i(
             TAG,
@@ -3487,7 +3311,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 "softwareHevc=${airPlayConfig.hevc && hevcSoftwareDecoderEnabled} " +
                 "microphone=${airPlayConfig.microphone} " +
                 "location=${config.locationReportingEnabled} " +
-                "mfi=${config.mfiTarget}",
+                "mfi=local-files",
         )
         val renderer = createMediaSink(
             videoWidth = airPlayConfig.main.widthPixels,
@@ -3582,6 +3406,10 @@ class CarPlayHostActivity : ComponentActivity() {
     private fun maybeStartCarPlay() {
         if (controller == null && adoptBackgroundSession()) return
         val size = activeDisplaySize ?: return
+        if (localMfiCertificateUri.isBlank() || localMfiPrivateKeyUri.isBlank()) {
+            setConnectionStage("Select a local MFi certificate and private key in Settings")
+            return
+        }
         val transportReady = if (wirelessEnabled) wirelessPermissionsReady else vpnReady
         val locationReady = !locationReportingEnabled || locationPermissionAvailable
         if (
@@ -3728,7 +3556,7 @@ class CarPlayHostActivity : ComponentActivity() {
             "$prefix; starting a fresh handshake at " +
                 "${CarPlayDisplayScale.label(displayScaleTenths)} with " +
                 (if (hevcEnabled) "HEVC (H.265)" else "H.264") +
-                ", MFI ${mfiTargetLabel(mfiTarget)}" +
+                ", MFI Local files" +
                 ", Wi-Fi session ${hotspotModeLabel(wirelessHotspotMode)}",
         )
         if (handshakeResetInProgress) {
@@ -4057,8 +3885,6 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private fun CarPlayStatus.describe(): String = when (this) {
         CarPlayStatus.DiscoveringMfi -> "Preparing MFi authentication"
-        CarPlayStatus.WaitingForMfi -> "Waiting for MFi coprocessor"
-        CarPlayStatus.RequestingMfiPermission -> "Requesting MFi USB permission"
         CarPlayStatus.MfiReady -> "MFi authentication ready"
         CarPlayStatus.StartingHotspot -> "Starting wireless hotspot"
         is CarPlayStatus.HotspotReady ->

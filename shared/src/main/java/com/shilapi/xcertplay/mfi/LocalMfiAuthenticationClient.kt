@@ -15,11 +15,9 @@ import org.bouncycastle.asn1.ASN1Sequence
 /**
  * File-backed MFi authenticator for deployment-provided certificate and private-key material.
  *
- * AuthV2 and AuthV3 both use the ordinary [MfiCertificateType.MFI] wire path; the BAA type is a
- * separate two-certificate protocol. The certificate is sent byte-for-byte to the phone. The
- * supported document format is a DER PKCS#7 certificate (`.p7b`) plus an unencrypted DER PKCS#8
- * private key (`.pk8`). Both documents are loaded once when the session opens, so replacing either
- * document takes effect on reconnect.
+ * The certificate is sent byte-for-byte to the phone. The supported document format is a DER
+ * PKCS#7 certificate (`.p7b`) plus an unencrypted DER PKCS#8 private key (`.pk8`). Both documents
+ * are loaded once when the session opens, so replacing either document takes effect on reconnect.
  */
 class LocalMfiAuthenticationClient private constructor(
     certificateBytes: ByteArray,
@@ -29,8 +27,6 @@ class LocalMfiAuthenticationClient private constructor(
 ) : MfiAuthenticator {
     private val certificate = certificateBytes.copyOf()
     private val operationLock = Any()
-
-    override val certificateType: MfiCertificateType = MfiCertificateType.MFI
 
     override fun protocolMajor(): Int = majorVersion
 

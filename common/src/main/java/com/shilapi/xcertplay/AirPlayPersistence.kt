@@ -13,7 +13,6 @@ import com.shilapi.xcertplay.media.MainMediaAudioBuffer
 import com.shilapi.xcertplay.media.MicrophoneGain
 import com.shilapi.xcertplay.orchestration.ManualHotspotBand
 import com.shilapi.xcertplay.orchestration.ManualHotspotSecurity
-import com.shilapi.xcertplay.orchestration.MfiTarget
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
 import com.shilapi.xcertplay.transport.LockdownPairRecord
 import java.io.File
@@ -65,10 +64,6 @@ object AirPlayPersistence {
     private const val KEY_SAFE_AREA_DRAW_OUTSIDE = "safe_area_draw_outside"
     private const val KEY_AUTO_START_ON_BOOT = "auto_start_on_boot"
     private const val KEY_LOCATION_REPORTING_ENABLED = "location_reporting_enabled"
-    private const val KEY_MFI_TARGET = "mfi_target"
-    private const val KEY_MFI_I2C_PATH = "mfi_i2c_path"
-    private const val KEY_REMOTE_MFI_SERVER = "remote_mfi_server"
-    private const val KEY_REMOTE_MFI_TOKEN = "remote_mfi_token"
     private const val KEY_LOCAL_MFI_CERTIFICATE_URI = "local_mfi_certificate_uri"
     private const val KEY_LOCAL_MFI_PRIVATE_KEY_URI = "local_mfi_private_key_uri"
     private const val SAFE_AREA_KEY_PREFIX = "safe_area_"
@@ -77,7 +72,6 @@ object AirPlayPersistence {
     const val DEFAULT_MANUFACTURER = "xcertplay"
     const val DEFAULT_MODEL = "xcertplay"
     const val DEFAULT_OEM_LABEL = ""
-    const val DEFAULT_MFI_I2C_PATH = "/dev/i2c-1"
 
     fun loadDisplayScaleTenths(context: Context): Int {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -161,49 +155,12 @@ object AirPlayPersistence {
             .apply()
     }
 
-    fun loadMfiTarget(context: Context): MfiTarget {
-        val stored = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_MFI_TARGET, null)
-        return MfiTarget.entries.firstOrNull { it.name == stored } ?: MfiTarget.USB_CH341
-    }
-
-    fun saveMfiTarget(context: Context, target: MfiTarget) {
+    fun clearDeprecatedMfiAuthenticationSettings(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_MFI_TARGET, target.name)
-            .apply()
-    }
-
-    fun loadMfiI2cPath(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_MFI_I2C_PATH, null)
-            ?.takeIf { it.isNotBlank() }
-            ?: DEFAULT_MFI_I2C_PATH
-
-    fun saveMfiI2cPath(context: Context, path: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_MFI_I2C_PATH, path.trim())
-            .apply()
-    }
-
-    fun loadRemoteMfiServer(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_REMOTE_MFI_SERVER, null)
-            .orEmpty()
-
-    fun saveRemoteMfiServer(context: Context, server: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_REMOTE_MFI_SERVER, server)
-            .apply()
-    }
-
-    fun loadRemoteMfiToken(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_REMOTE_MFI_TOKEN, null)
-            .orEmpty()
-
-    fun saveRemoteMfiToken(context: Context, token: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_REMOTE_MFI_TOKEN, token)
+            .remove("mfi_target")
+            .remove("mfi_i2c_path")
+            .remove("remote_mfi_server")
+            .remove("remote_mfi_token")
             .apply()
     }
 
