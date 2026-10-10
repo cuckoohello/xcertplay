@@ -443,8 +443,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 "transport=${if (wirelessEnabled) "wireless" else "wired"}",
         )
         val reusedBackgroundSession = adoptBackgroundSession()
-        microphoneAvailable =
-            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        microphoneAvailable = hasPermission(Manifest.permission.RECORD_AUDIO)
         microphonePermissionResolved = microphoneAvailable
         if (reusedBackgroundSession) {
             updateDebugOverlays()
@@ -515,6 +514,11 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private fun requestLocationPermission() {
         if (locationPermissionAvailable || awaitingLocationPermission) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            locationPermissionAvailable = true
+            requestStartupPrerequisites()
+            return
+        }
         awaitingLocationPermission = true
         locationPermission.launch(
             arrayOf(
@@ -525,8 +529,11 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     private fun hasFineLocationPermission(): Boolean =
-        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
+        hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+
+    private fun hasPermission(permission: String): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+            checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
     private fun requestVpnConsent() {
         val consent = CarPlayVpnService.prepare(this)
@@ -541,7 +548,7 @@ class CarPlayHostActivity : ComponentActivity() {
 
     private fun requestWirelessPermissions() {
         val permissions = requiredWirelessPermissions()
-        if (permissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }) {
+        if (permissions.all(::hasPermission)) {
             wirelessPermissionsReady = true
             updateHotspotStatusBlock()
             maybeStartCarPlay()
@@ -554,9 +561,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     private fun hasRequiredWirelessPermissions(): Boolean =
-        requiredWirelessPermissions().all {
-            checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
-        }
+        requiredWirelessPermissions().all(::hasPermission)
 
     private fun requiredWirelessPermissions(): List<String> = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> listOf(
@@ -568,10 +573,11 @@ class CarPlayHostActivity : ComponentActivity() {
             Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.ACCESS_FINE_LOCATION,
         )
-        else -> listOf(
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M -> listOf(
             Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.ACCESS_FINE_LOCATION,
         )
+        else -> emptyList()
     }
 
     override fun onResume() {
@@ -811,14 +817,7 @@ class CarPlayHostActivity : ComponentActivity() {
             isChecked = wirelessEnabled
             contentDescription = "Wireless CarPlay transport"
             showText = false
-            thumbTintList = ColorStateList(
-                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(MENU_ACCENT, MENU_SECONDARY),
-            )
-            trackTintList = ColorStateList(
-                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(MENU_ACCENT_TRACK, MENU_TRACK_OFF),
-            )
+            tintSwitch(this)
             setOnCheckedChangeListener { _, checked ->
                 if (wirelessEnabled == checked) return@setOnCheckedChangeListener
                 wirelessEnabled = checked
@@ -1150,14 +1149,7 @@ class CarPlayHostActivity : ComponentActivity() {
             isChecked = hevcEnabled
             contentDescription = "HEVC H.265 video transport"
             showText = false
-            thumbTintList = ColorStateList(
-                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(MENU_ACCENT, MENU_SECONDARY),
-            )
-            trackTintList = ColorStateList(
-                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(MENU_ACCENT_TRACK, MENU_TRACK_OFF),
-            )
+            tintSwitch(this)
             setOnCheckedChangeListener { _, checked ->
                 if (hevcEnabled == checked) return@setOnCheckedChangeListener
                 hevcEnabled = checked
@@ -1195,14 +1187,7 @@ class CarPlayHostActivity : ComponentActivity() {
             isChecked = hevcSoftwareDecoderEnabled
             contentDescription = "Use software HEVC decoder"
             showText = false
-            thumbTintList = ColorStateList(
-                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(MENU_ACCENT, MENU_SECONDARY),
-            )
-            trackTintList = ColorStateList(
-                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(MENU_ACCENT_TRACK, MENU_TRACK_OFF),
-            )
+            tintSwitch(this)
             setOnCheckedChangeListener { _, checked ->
                 if (hevcSoftwareDecoderEnabled == checked) return@setOnCheckedChangeListener
                 hevcSoftwareDecoderEnabled = checked
@@ -1307,30 +1292,6 @@ class CarPlayHostActivity : ComponentActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = dp(16) },
         )
-
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            content.addView(
-                settingsCategoryHeader("Android 9 compatibility"),
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(40) },
-            )
-            content.addView(
-                menuText(
-                    "The following settings are unavailable and hidden on Android 9 " +
-                        "(API 28):\n" +
-                        "• Wi-Fi P2P (5 GHz) — LocalOnlyHotspot is used instead.\n" +
-                        "• HEVC software decoder — hardware decoding is used instead.",
-                    16f,
-                    MENU_SECONDARY,
-                ),
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(12) },
-            )
-        }
 
         val preview = menuText("", 17f, MENU_SECONDARY)
         content.addView(
@@ -1753,14 +1714,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 isChecked = locationReportingEnabled
                 contentDescription = "Report Android location to the iPhone"
                 showText = false
-                thumbTintList = ColorStateList(
-                    arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(MENU_ACCENT, MENU_SECONDARY),
-                )
-                trackTintList = ColorStateList(
-                    arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(MENU_ACCENT_TRACK, MENU_TRACK_OFF),
-                )
+                tintSwitch(this)
                 setOnCheckedChangeListener { _, checked ->
                     onLocationReportingChanged(checked)
                 }
@@ -2497,6 +2451,18 @@ class CarPlayHostActivity : ComponentActivity() {
         )
     }
 
+    private fun tintSwitch(switch: Switch) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        switch.thumbTintList = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(MENU_ACCENT, MENU_SECONDARY),
+        )
+        switch.trackTintList = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(MENU_ACCENT_TRACK, MENU_TRACK_OFF),
+        )
+    }
+
     private fun settingsSwitchRow(
         label: String,
         checked: Boolean,
@@ -2514,14 +2480,7 @@ class CarPlayHostActivity : ComponentActivity() {
                 isChecked = checked
                 contentDescription = description
                 showText = false
-                thumbTintList = ColorStateList(
-                    arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(MENU_ACCENT, MENU_SECONDARY),
-                )
-                trackTintList = ColorStateList(
-                    arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(MENU_ACCENT_TRACK, MENU_TRACK_OFF),
-                )
+                tintSwitch(this)
                 setOnCheckedChangeListener { _, value -> onChanged(value) }
             },
             LinearLayout.LayoutParams(
@@ -2569,10 +2528,16 @@ class CarPlayHostActivity : ComponentActivity() {
             setPadding(0, dp(8), 0, 0)
         }
         val modes = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                add(WirelessHotspotMode.WIFI_P2P to "Wi-Fi P2P (5 GHz)")
+            add(
+                WirelessHotspotMode.WIFI_P2P to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    "Wi-Fi P2P (5 GHz)"
+                } else {
+                    "Wi-Fi P2P (system-selected band)"
+                },
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                add(WirelessHotspotMode.LOCAL_ONLY_HOTSPOT to "LocalOnlyHotspot")
             }
-            add(WirelessHotspotMode.LOCAL_ONLY_HOTSPOT to "LocalOnlyHotspot")
             add(WirelessHotspotMode.MANUAL to "Manual hotspot")
         }
         var selectedId = View.NO_ID
@@ -2775,7 +2740,12 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     private fun hotspotModeLabel(mode: WirelessHotspotMode): String = when (mode) {
-        WirelessHotspotMode.WIFI_P2P -> "Wi-Fi P2P (5 GHz)"
+        WirelessHotspotMode.WIFI_P2P ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                "Wi-Fi P2P (5 GHz)"
+            } else {
+                "Wi-Fi P2P (system-selected band)"
+            }
         WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> "LocalOnlyHotspot"
         WirelessHotspotMode.MANUAL -> "Manual hotspot"
     }

@@ -14,7 +14,7 @@
 - 支持语音、导航、音乐多通道音频输出并 mapping 至 Android 的对应通道。
 - 支持动态 Activity resize ，并自动重新握手至新的分辨率。
 - 支持车机位置回传。
-- 支持 Android 9 (API 28) 。
+- 支持 Android 5.0+（API 21，覆盖 Android 5.1/API 22）。
 
 ## 使用方法
 
@@ -50,8 +50,10 @@
 
 - 启动 Gradle 需要 JDK 17 或更高版本；daemon 通过 Gradle toolchain 解析 Java 25。
 - Android SDK Platform 37。
-- Android 9（API 28）或更高版本。
-  在 Android 9 上不可用 Wi-Fi P2P 5 GHz 模式，应用会改用 LocalOnlyHotspot。
+- Android 5.0（API 21）或更高版本，覆盖 Android 5.1（API 22）。
+  API 21-28 的 Wi-Fi P2P 使用系统生成的凭据和频段；API 29 或更高版本保留证书派生的
+  自定义 5 GHz 凭据。LocalOnlyHotspot 仅在 API 26 或更高版本提供；手动热点模式在所有
+  支持的 Android 版本可用，但需要先在系统设置中启用热点。
 
 ## 构建
 

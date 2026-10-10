@@ -1,8 +1,8 @@
 package com.shilapi.xcertplay.network
 
+import android.annotation.TargetApi
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.MacAddress
 import android.net.wifi.SoftApConfiguration
 import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
@@ -10,7 +10,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
-import androidx.annotation.RequiresApi
 import com.shilapi.xcertplay.transport.Iap2WirelessSecurity
 import java.io.IOException
 import java.net.Inet4Address
@@ -31,8 +30,8 @@ import java.util.concurrent.TimeUnit
  */
 class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
     private val connectivityManager =
-        context.applicationContext.getSystemService(ConnectivityManager::class.java)
-    private val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
+        context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
         ?: throw IllegalStateException("WifiManager is unavailable")
     private val stateLock = Object()
 
@@ -237,7 +236,7 @@ class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
     }
 
     @Suppress("DEPRECATION")
-    @RequiresApi(Build.VERSION_CODES.R)
+    @TargetApi(Build.VERSION_CODES.R)
     private fun readSoftApConfiguration(configuration: SoftApConfiguration): HotspotConfiguration {
         val ssid = validateSsid(configuration.ssid)
         val security = mapSoftApSecurity(configuration.securityType)
@@ -245,7 +244,7 @@ class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
         val channel = if (Build.VERSION.SDK_INT >= 36) {
             readConfiguredChannel(configuration)
         } else {
-            readLegacySoftApChannel(configuration)
+            0 to "System selected"
         }
         val bssid = configuration.bssid
 
@@ -265,27 +264,21 @@ class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
         val ssid = validateSsid(configuration.SSID)
         val security = mapWifiConfigurationSecurity(configuration)
         val passphrase = validatePassphrase(security, unquote(configuration.preSharedKey))
-        val bssid = configuration.BSSID?.let {
-            try {
-                MacAddress.fromString(it)
-            } catch (failure: IllegalArgumentException) {
-                throw IOException("LocalOnlyHotspot reported an invalid BSSID: $it", failure)
-            }
-        }
-        val channel = readWifiConfigurationChannel(configuration)
+        val bssid = configuration.BSSID?.takeIf { it.isNotBlank() }
+        val bssidBytes = bssid?.toMacAddressBytes()
 
         return HotspotConfiguration(
             ssid = ssid,
             passphrase = passphrase,
             security = security,
-            channel = channel,
-            bssid = bssid?.toString(),
-            bssidBytes = bssid?.toByteArray(),
-            bandLabel = readWifiConfigurationBandLabel(configuration, channel),
+            channel = 0,
+            bssid = bssid,
+            bssidBytes = bssidBytes,
+            bandLabel = "System selected",
         )
     }
 
-    @RequiresApi(36)
+    @TargetApi(36)
     private fun readConfiguredChannel(configuration: SoftApConfiguration): Pair<Int, String> {
         val channels = configuration.channels
         if (channels.size() != 1) {
@@ -298,65 +291,6 @@ class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
             allowAuto = true,
         )
         return channel to softApBandLabel(band)
-    }
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    private fun readLegacySoftApChannel(configuration: SoftApConfiguration): Pair<Int, String> {
-        val channel = try {
-            val getter = SoftApConfiguration::class.java.getMethod("getChannel")
-            val value = getter.invoke(configuration) as? Number
-                ?: throw IOException("SoftApConfiguration.getChannel returned no channel")
-            requireChannel(
-                value.toInt(),
-                "SoftApConfiguration.getChannel",
-                allowAuto = true,
-            )
-        } catch (failure: ReflectiveOperationException) {
-            throw IOException(
-                "Android ${Build.VERSION.RELEASE} does not expose SoftApConfiguration.getChannel",
-                failure,
-            )
-        }
-        return channel to readLegacySoftApBandLabel(configuration, channel)
-    }
-
-    private fun readWifiConfigurationChannel(configuration: WifiConfiguration): Int {
-        val channel = try {
-            WifiConfiguration::class.java.getField("apChannel").getInt(configuration)
-        } catch (failure: ReflectiveOperationException) {
-            throw IOException(
-                "Android ${Build.VERSION.RELEASE} does not expose WifiConfiguration.apChannel",
-                failure,
-            )
-        }
-        return requireChannel(channel, "WifiConfiguration.apChannel", allowAuto = true)
-    }
-
-    private fun readWifiConfigurationBandLabel(
-        configuration: WifiConfiguration,
-        channel: Int,
-    ): String {
-        val band = try {
-            (WifiConfiguration::class.java.getField("apBand").get(configuration) as? Number)
-                ?.toInt()
-        } catch (_: ReflectiveOperationException) {
-            null
-        }
-        return band?.let(::softApBandLabel) ?: legacyBandLabel(channel)
-    }
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    private fun readLegacySoftApBandLabel(
-        configuration: SoftApConfiguration,
-        channel: Int,
-    ): String {
-        val band = try {
-            (SoftApConfiguration::class.java.getMethod("getBand").invoke(configuration) as? Number)
-                ?.toInt()
-        } catch (_: ReflectiveOperationException) {
-            null
-        }
-        return band?.let(::softApBandLabel) ?: legacyBandLabel(channel)
     }
 
     private fun awaitApInterface(
@@ -424,13 +358,18 @@ class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
         candidates.firstOrNull { it.name !in preStartInterfaces && it.hotspotAddress() != null }
             ?.let { return it }
 
-        val primaryInterface = connectivityManager?.activeNetwork
-            ?.let { connectivityManager.getLinkProperties(it)?.interfaceName }
+        val primaryInterface = activeNetworkInterfaceName()
         val nonPrimary = candidates.filter { it.name != primaryInterface }
         return nonPrimary.firstOrNull { it.hasPrivate192Address() }
             ?: nonPrimary.firstOrNull { it.hasSiteLocalAddress() }
             ?: nonPrimary.firstOrNull { it.hasLinkLocalAddress() }
             ?: nonPrimary.firstOrNull { it.hotspotAddress() != null }
+    }
+
+    private fun activeNetworkInterfaceName(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null
+        return connectivityManager?.activeNetwork
+            ?.let { connectivityManager.getLinkProperties(it)?.interfaceName }
     }
 
     private fun networkInterfaceNames(): Set<String> =
@@ -549,7 +488,7 @@ class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
         return passphrase
     }
 
-    @RequiresApi(Build.VERSION_CODES.R)
+    @TargetApi(Build.VERSION_CODES.R)
     private fun mapSoftApSecurity(securityType: Int): Iap2WirelessSecurity = when (securityType) {
         SoftApConfiguration.SECURITY_TYPE_OPEN -> Iap2WirelessSecurity.NONE
         SoftApConfiguration.SECURITY_TYPE_WPA2_PSK -> Iap2WirelessSecurity.WPA_WPA2
@@ -571,8 +510,10 @@ class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
             ?: throw IOException("LocalOnlyHotspot did not report its key management")
         val open = keyManagement.get(WifiConfiguration.KeyMgmt.NONE)
         val wpa2 = keyManagement.get(WifiConfiguration.KeyMgmt.WPA2_PSK)
-        val sae = keyManagement.get(WifiConfiguration.KeyMgmt.SAE)
-        val owe = keyManagement.get(WifiConfiguration.KeyMgmt.OWE)
+        val sae = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            keyManagement.get(WifiConfiguration.KeyMgmt.SAE)
+        val owe = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            keyManagement.get(WifiConfiguration.KeyMgmt.OWE)
 
         return when {
             owe -> throw IOException("Unsupported LocalOnlyHotspot security type: OWE")
@@ -600,6 +541,16 @@ class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
     private fun ByteArray.toMacAddressString(): String =
         joinToString(":") { "%02x".format(it.toInt() and 0xff) }
 
+    private fun String.toMacAddressBytes(): ByteArray? {
+        val parts = split(':')
+        if (parts.size != 6) return null
+        return try {
+            ByteArray(parts.size) { index -> parts[index].toInt(16).toByte() }
+        } catch (_: NumberFormatException) {
+            null
+        }
+    }
+
     private fun Inet6Address.toEui64MacAddress(): String? {
         val bytes = address
         if (!isLinkLocalAddress || bytes.size != 16 || bytes[11] != 0xff.toByte() ||
@@ -617,18 +568,13 @@ class LocalOnlyHotspotManager(context: Context) : WirelessHotspotManager {
         ).toMacAddressString()
     }
 
+    @TargetApi(36)
     private fun softApBandLabel(band: Int): String = when (band) {
         SoftApConfiguration.BAND_2GHZ -> "2.4 GHz"
         SoftApConfiguration.BAND_5GHZ -> "5 GHz"
         SoftApConfiguration.BAND_6GHZ -> "6 GHz"
         SoftApConfiguration.BAND_60GHZ -> "60 GHz"
         else -> "Unknown band ($band)"
-    }
-
-    private fun legacyBandLabel(channel: Int): String = when (channel) {
-        in 1..14 -> "2.4 GHz"
-        in 32..177 -> "5 GHz"
-        else -> "Unknown band"
     }
 
     private fun unquote(value: String?): String? {

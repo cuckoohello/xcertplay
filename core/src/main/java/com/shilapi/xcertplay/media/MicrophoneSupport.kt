@@ -5,6 +5,7 @@ import android.media.AudioFormat as AndroidAudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
@@ -18,23 +19,43 @@ internal fun openMicrophoneRecorder(requestedBufferBytes: Int): AudioRecord {
         AndroidAudioFormat.ENCODING_PCM_16BIT,
     )
     check(minBuffer > 0) { "microphone unavailable at $MICROPHONE_CAPTURE_RATE_HZ Hz" }
-    val recorder = AudioRecord.Builder()
-        .setAudioSource(MediaRecorder.AudioSource.MIC)
-        .setAudioFormat(
-            AndroidAudioFormat.Builder()
-                .setEncoding(AndroidAudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(MICROPHONE_CAPTURE_RATE_HZ)
-                .setChannelMask(AndroidAudioFormat.CHANNEL_IN_MONO)
-                .build(),
+    val bufferBytes = maxOf(minBuffer * 2, requestedBufferBytes)
+    val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        AudioRecord.Builder()
+            .setAudioSource(MediaRecorder.AudioSource.MIC)
+            .setAudioFormat(
+                AndroidAudioFormat.Builder()
+                    .setEncoding(AndroidAudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(MICROPHONE_CAPTURE_RATE_HZ)
+                    .setChannelMask(AndroidAudioFormat.CHANNEL_IN_MONO)
+                    .build(),
+            )
+            .setBufferSizeInBytes(bufferBytes)
+            .build()
+    } else {
+        @Suppress("DEPRECATION")
+        AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            MICROPHONE_CAPTURE_RATE_HZ,
+            AndroidAudioFormat.CHANNEL_IN_MONO,
+            AndroidAudioFormat.ENCODING_PCM_16BIT,
+            bufferBytes,
         )
-        .setBufferSizeInBytes(maxOf(minBuffer * 2, requestedBufferBytes))
-        .build()
+    }
     if (recorder.state != AudioRecord.STATE_INITIALIZED) {
         recorder.release()
         error("microphone recorder failed to initialize")
     }
     return recorder
 }
+
+internal fun readMicrophoneRecorder(recorder: AudioRecord, buffer: ByteArray): Int =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
+    } else {
+        @Suppress("DEPRECATION")
+        recorder.read(buffer, 0, buffer.size)
+    }
 
 object MicrophoneGain {
     const val MIN_PERCENT = 80
@@ -167,8 +188,7 @@ class MicrophoneLevelMonitor(
             activeRecorder.startRecording()
             val buffer = ByteArray(frameBytes)
             while (running.get()) {
-                val count =
-                    activeRecorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
+                val count = readMicrophoneRecorder(activeRecorder, buffer)
                 if (count < 0) error("microphone level read failed code=$count")
                 if (count == 0) continue
                 val peak =

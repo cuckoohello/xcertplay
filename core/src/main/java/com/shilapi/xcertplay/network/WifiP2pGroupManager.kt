@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.network
 
+import android.annotation.TargetApi
 import android.content.Context
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pGroup
@@ -9,7 +10,6 @@ import android.os.Build
 import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
-import androidx.annotation.RequiresApi
 import com.shilapi.xcertplay.transport.Iap2WirelessSecurity
 import java.io.IOException
 import java.net.Inet4Address
@@ -50,13 +50,12 @@ internal fun mfiCertificateWifiP2pCredentials(certificate: ByteArray): WifiP2pCr
  *
  * The group is deliberately not persistent. [close] removes it and releases the callback thread.
  */
-class WifiP2pGroupManager(
+internal class WifiP2pGroupManager(
     context: Context,
-    private val networkName: String,
-    private val passphrase: String,
+    private val requestedCredentials: WifiP2pCredentials? = null,
 ) : WirelessHotspotManager {
     private val appContext = context.applicationContext
-    private val p2pManager = appContext.getSystemService(WifiP2pManager::class.java)
+    private val p2pManager = (appContext.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager)
         ?: throw IllegalStateException("WifiP2pManager is unavailable")
     private val stateLock = Object()
 
@@ -67,9 +66,6 @@ class WifiP2pGroupManager(
     private var startAttempt: StartAttempt? = null
 
     override fun start(timeoutMillis: Long): WirelessHotspotInfo {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            throw IOException("Wi-Fi P2P credentials require Android 10 (API 29) or newer")
-        }
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "WifiP2pGroupManager.start must not run on the main thread"
         }
@@ -87,7 +83,13 @@ class WifiP2pGroupManager(
         val thread = HandlerThread("xcertplay-wifi-p2p").apply { start() }
         attempt.thread = thread
         val deadlineNanos = deadlineAfter(timeoutMillis)
-        val credentials = WifiP2pCredentials(networkName, passphrase)
+        val credentials = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            requireNotNull(requestedCredentials) {
+                "Wi-Fi P2P credentials are required on Android 10 (API 29) and newer"
+            }
+        } else {
+            null
+        }
 
         try {
             val p2pChannel = p2pManager.initialize(
@@ -102,26 +104,34 @@ class WifiP2pGroupManager(
                 callbackThread = thread
             }
 
-            val config = WifiP2pConfig.Builder()
-                .setNetworkName(credentials.ssid)
-                .setPassphrase(credentials.passphrase)
-                .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_5GHZ)
-                .build()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                config.groupOwnerIntent = WifiP2pConfig.GROUP_OWNER_INTENT_MAX
-            }
-
             ensureStartActive(attempt)
-            p2pManager.createGroup(p2pChannel, config, createActionListener(attempt))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                createGroupWithRequestedCredentials(
+                    channel = p2pChannel,
+                    credentials = checkNotNull(credentials),
+                    listener = createActionListener(attempt),
+                )
+            } else {
+                p2pManager.createGroup(p2pChannel, createActionListener(attempt))
+            }
             awaitGroupCreated(attempt, deadlineNanos, timeoutMillis)
 
-            val group = awaitUsableGroup(
-                attempt = attempt,
-                channel = p2pChannel,
-                credentials = credentials,
-                deadlineNanos = deadlineNanos,
-                timeoutMillis = timeoutMillis,
-            )
+            val group = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                awaitUsableConfiguredGroup(
+                    attempt = attempt,
+                    channel = p2pChannel,
+                    credentials = checkNotNull(credentials),
+                    deadlineNanos = deadlineNanos,
+                    timeoutMillis = timeoutMillis,
+                )
+            } else {
+                awaitUsableSystemManagedGroup(
+                    attempt = attempt,
+                    channel = p2pChannel,
+                    deadlineNanos = deadlineNanos,
+                    timeoutMillis = timeoutMillis,
+                )
+            }
             synchronized(stateLock) {
                 ensureStartActiveLocked(attempt)
                 created = true
@@ -132,6 +142,23 @@ class WifiP2pGroupManager(
             cleanupFailedStart(attempt)
             throw failure
         }
+    }
+
+    @TargetApi(Build.VERSION_CODES.Q)
+    private fun createGroupWithRequestedCredentials(
+        channel: WifiP2pManager.Channel,
+        credentials: WifiP2pCredentials,
+        listener: WifiP2pManager.ActionListener,
+    ) {
+        val config = WifiP2pConfig.Builder()
+            .setNetworkName(credentials.ssid)
+            .setPassphrase(credentials.passphrase)
+            .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_5GHZ)
+            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            config.groupOwnerIntent = WifiP2pConfig.GROUP_OWNER_INTENT_MAX
+        }
+        p2pManager.createGroup(channel, config, listener)
     }
 
     override fun close() {
@@ -226,8 +253,8 @@ class WifiP2pGroupManager(
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private fun awaitUsableGroup(
+    @TargetApi(Build.VERSION_CODES.Q)
+    private fun awaitUsableConfiguredGroup(
         attempt: StartAttempt,
         channel: WifiP2pManager.Channel,
         credentials: WifiP2pCredentials,
@@ -299,6 +326,68 @@ class WifiP2pGroupManager(
                 interfaceName = interfaceName,
                 hostAddress = hostAddress,
                 bandLabel = "5 GHz",
+                backend = WirelessHotspotBackend.WIFI_P2P,
+            )
+        }
+    }
+
+    private fun awaitUsableSystemManagedGroup(
+        attempt: StartAttempt,
+        channel: WifiP2pManager.Channel,
+        deadlineNanos: Long,
+        timeoutMillis: Long,
+    ): WirelessHotspotInfo {
+        var lastReason = "group information was not available"
+        while (true) {
+            ensureStartActive(attempt)
+            val remainingNanos = remainingNanos(deadlineNanos)
+            if (remainingNanos <= 0) {
+                throw IOException(
+                    "Timed out after ${timeoutMillis}ms waiting for a usable Wi-Fi P2P group: " +
+                        lastReason,
+                )
+            }
+
+            val group = requestGroupInfo(
+                attempt = attempt,
+                channel = channel,
+                timeoutNanos = minOf(remainingNanos, REQUEST_POLL_NANOS),
+            )
+            if (group == null) continue
+            if (!group.isGroupOwner) {
+                throw IOException("Wi-Fi P2P device became a group client instead of owner")
+            }
+
+            val networkName = group.networkName?.takeIf { it.isNotBlank() }
+            val passphrase = group.passphrase?.takeIf { it.isNotBlank() }
+            val interfaceName = group.getInterface()?.takeIf { it.isNotBlank() }
+            if (networkName == null || passphrase == null) {
+                lastReason = "networkName=$networkName passphrase=${passphrase != null}"
+                continue
+            }
+
+            val hostAddress = interfaceName?.let(::interfaceAddress)
+                ?: requestConnectionAddress(
+                    attempt = attempt,
+                    channel = channel,
+                    timeoutNanos = minOf(remainingNanos(deadlineNanos), REQUEST_POLL_NANOS),
+                )
+            if (hostAddress == null) {
+                lastReason = "Wi-Fi P2P group has no usable IPv6 or IPv4 address"
+                continue
+            }
+
+            return WirelessHotspotInfo(
+                ssid = networkName,
+                passphrase = passphrase,
+                security = Iap2WirelessSecurity.WPA_WPA2,
+                channel = 0,
+                frequencyMHz = null,
+                bssid = interfaceName?.let(::interfaceHardwareAddress)
+                    ?: group.owner?.deviceAddress?.takeIf { it.isNotBlank() },
+                interfaceName = interfaceName,
+                hostAddress = hostAddress,
+                bandLabel = "System selected",
                 backend = WirelessHotspotBackend.WIFI_P2P,
             )
         }

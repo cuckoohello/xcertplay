@@ -17,7 +17,7 @@
 - Dynamic Activity resizing with automatic re-handshaking to the new
   resolution.
 - Vehicle head-unit location reporting.
-- Android 9 (API 28) support.
+- Android 5.0+ support (API 21; includes Android 5.1/API 22).
 
 ## Usage
 
@@ -59,8 +59,11 @@ saved.
 - JDK 17 or newer to launch Gradle. The daemon resolves Java 25 through the
   Gradle toolchain.
 - Android SDK Platform 37.
-- Android 9 (API 28) or newer.
-  On Android 9, Wi-Fi P2P 5 GHz mode is unavailable and LocalOnlyHotspot is used instead.
+- Android 5.0 (API 21) or newer, including Android 5.1 (API 22).
+  Wi-Fi P2P uses system-selected credentials and band on API 21-28, and retains custom
+  certificate-derived 5 GHz credentials on API 29 or newer. LocalOnlyHotspot is available on
+  API 26 or newer; manual hotspot mode is available on all supported Android versions after the
+  hotspot is enabled in system settings.
 
 ## Build
 

@@ -8,6 +8,7 @@ import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.math.BigInteger
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 /** Rendering seam for the decrypted CarPlay media streams. */
@@ -57,7 +58,8 @@ class CarPlayMediaEngine(
     private val streams = ConcurrentHashMap<StreamKey, Closeable>()
     private val audioMeta = ConcurrentHashMap<Int, AudioMeta>()
     private val pendingMicrophone = ConcurrentHashMap<StreamKey, MicrophoneConfig>()
-    private val startedMicrophone = ConcurrentHashMap.newKeySet<StreamKey>()
+    private val startedMicrophone =
+        Collections.newSetFromMap(ConcurrentHashMap<StreamKey, Boolean>())
     private val audioCaptures = ConcurrentHashMap<Int, AudioPacketCapture>()
     private val pendingIapTunnels = ConcurrentHashMap<AirPlaySession, PendingIapTunnel>()
     @Volatile private var iapTunnelHandler: ((BlockingDuplexByteStream) -> Boolean)? = null

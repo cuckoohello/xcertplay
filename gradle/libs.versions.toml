@@ -1,26 +1,24 @@
 [versions]
 agp = "9.3.0"
-coreKtx = "1.19.0"
+coreKtx = "1.15.0"
 lifecycleRuntimeKtx = "2.6.1"
 activity = "1.8.0"
-appProjected = "1.4.0"
-app = "1.4.0"
 junit = "4.13.2"
 bouncycastle = "1.79"
 concentus = "1.0.0"
-media3 = "1.11.1"
+media3 = "1.8.0"
+desugarJdkLibs = "2.1.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
 androidx-activity = { group = "androidx.activity", name = "activity-ktx", version.ref = "activity" }
-androidx-app-projected = { group = "androidx.car.app", name = "app-projected", version.ref = "appProjected" }
-androidx-app = { group = "androidx.car.app", name = "app", version.ref = "app" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 concentus = { group = "com.plasmoverse", name = "concentus", version.ref = "concentus" }
 androidx-media3-container = { group = "androidx.media3", name = "media3-container", version.ref = "media3" }
 androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -110,8 +110,14 @@ class AndroidMediaSink(
     }
 
     override fun onMicrophoneStarted(type: Int, config: MicrophoneConfig) {
-        val uplink = microphoneUplinks.computeIfAbsent(type) {
-            MicrophoneUplink(context, config, microphoneGainPercent)
+        val uplink = synchronized(microphoneUplinks) {
+            microphoneUplinks[type] ?: MicrophoneUplink(
+                context,
+                config,
+                microphoneGainPercent,
+            ).also {
+                microphoneUplinks[type] = it
+            }
         }
         if (!uplink.start()) microphoneUplinks.remove(type, uplink)
     }
@@ -131,17 +137,18 @@ class AndroidMediaSink(
         microphoneUplinks.clear()
     }
 
-    private fun videoDecoder(type: Int): VideoDecoder =
-        videoDecoders.computeIfAbsent(type) {
-            VideoDecoder(
-                surfaces[type] ?: defaultSurface,
-                videoWidth,
-                videoHeight,
-                preferSoftwareHevcDecoder,
-                mediaMetricsMonitor,
-                requestKeyFrame = { videoRecoveryHandlers[type]?.invoke() ?: false },
-            )
+    private fun videoDecoder(type: Int): VideoDecoder = synchronized(videoDecoders) {
+        videoDecoders[type] ?: VideoDecoder(
+            surfaces[type] ?: defaultSurface,
+            videoWidth,
+            videoHeight,
+            preferSoftwareHevcDecoder,
+            mediaMetricsMonitor,
+            requestKeyFrame = { videoRecoveryHandlers[type]?.invoke() ?: false },
+        ).also {
+            videoDecoders[type] = it
         }
+    }
 
     @Synchronized
     private fun audioRenderer(type: Int, format: AudioFormat): AudioRenderer {
@@ -381,7 +388,7 @@ private class VideoDecoder(
             return
         }
         val codec = decoder
-        if (codec != null) {
+        if (codec != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             try {
                 codec.setOutputSurface(surface)
                 Log.i(TAG, "video decoder output surface updated")
@@ -683,18 +690,29 @@ private class AudioRenderer(
         } else {
             maxOf(minBuffer, MIN_START_BUFFER_BYTES)
         }
-        track = AudioTrack.Builder()
-            .setAudioAttributes(audioAttributes())
-            .setAudioFormat(
-                AndroidAudioFormat.Builder()
-                    .setEncoding(encoding)
-                    .setSampleRate(format.sampleRate)
-                    .setChannelMask(channelMask)
-                    .build(),
-            )
-            .setBufferSizeInBytes(bufferBytes)
-            .setTransferMode(AudioTrack.MODE_STREAM)
+        val attributes = audioAttributes()
+        val audioFormat = AndroidAudioFormat.Builder()
+            .setEncoding(encoding)
+            .setSampleRate(format.sampleRate)
+            .setChannelMask(channelMask)
             .build()
+        track = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            AudioTrack.Builder()
+                .setAudioAttributes(attributes)
+                .setAudioFormat(audioFormat)
+                .setBufferSizeInBytes(bufferBytes)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            AudioTrack(
+                attributes,
+                audioFormat,
+                bufferBytes,
+                AudioTrack.MODE_STREAM,
+                0,
+            )
+        }
         // AudioTrack consumes 16-bit PCM, so frame size follows the channel mask configured above.
         trackBytesPerFrame = trackChannelCount * BYTES_PER_PCM_16_SAMPLE
         Log.i(
@@ -749,7 +767,12 @@ private class AudioRenderer(
     private fun usageFor(channel: AudioChannel): Int = when (channel) {
         AudioChannel.MEDIA -> AudioAttributes.USAGE_MEDIA
         AudioChannel.PHONE -> AudioAttributes.USAGE_VOICE_COMMUNICATION
-        AudioChannel.ASSISTANT -> AudioAttributes.USAGE_ASSISTANT
+        AudioChannel.ASSISTANT ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                AudioAttributes.USAGE_ASSISTANT
+            } else {
+                AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+            }
         AudioChannel.NAVIGATION -> AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
     }
 
@@ -923,7 +946,17 @@ private class AudioRenderer(
             } else {
                 minOf(length - written, PREBUFFER_WRITE_CHUNK_BYTES)
             }
-            val count = track.write(data, offset + written, writeLength, AudioTrack.WRITE_BLOCKING)
+            val count = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                track.write(
+                    data,
+                    offset + written,
+                    writeLength,
+                    AudioTrack.WRITE_BLOCKING,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                track.write(data, offset + written, writeLength)
+            }
             if (count <= 0) break
             written += count
             totalBytesWritten += count

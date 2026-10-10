@@ -278,11 +278,16 @@ class IphoneUsbHost(
 
     private fun permissionPendingIntent(): PendingIntent {
         val intent = Intent(permissionAction).setPackage(appContext.packageName)
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
         return PendingIntent.getBroadcast(
             appContext,
             0,
             intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            flags,
         )
     }
 
@@ -363,17 +368,12 @@ class Iap2UsbSession internal constructor(
                 pendingRead = request
             }
             val buffer = ByteBuffer.allocateDirect(USBMUX_READ_CHUNK_BYTES)
-            if (!request.queue(buffer)) {
+            if (!queueReadRequest(request, buffer)) {
                 throw IphoneUsbException.DeviceUnavailable("Android could not queue USBMUX read request")
             }
-            val completed = try {
-                connection.requestWait(timeoutMillis)
-            } catch (_: TimeoutException) {
-                drainCancelledRead(request)
-                return@synchronized null
-            }
+            val completed = awaitReadRequest(request, timeoutMillis)
             if (completed == null) {
-                throw failSession("Android returned no USBMUX read request")
+                return@synchronized null
             }
             if (completed !== request) {
                 throw failSession("Android completed an unexpected USB request")
@@ -414,6 +414,56 @@ class Iap2UsbSession internal constructor(
         if (closed) throw IphoneUsbException.DeviceUnavailable("USBMUX session is closed")
     }
 
+    private fun queueReadRequest(request: UsbRequest, buffer: ByteBuffer): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            request.queue(buffer)
+        } else {
+            @Suppress("DEPRECATION")
+            request.queue(buffer, buffer.capacity())
+        }
+
+    private fun awaitReadRequest(
+        request: UsbRequest,
+        timeoutMillis: Long,
+    ): UsbRequest? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return try {
+                connection.requestWait(timeoutMillis)
+            } catch (_: TimeoutException) {
+                drainCancelledRead(request)
+                null
+            }
+        }
+
+        val finished = AtomicBoolean(false)
+        val timedOut = AtomicBoolean(false)
+        val cancellation = Thread(
+            {
+                try {
+                    Thread.sleep(timeoutMillis)
+                    if (finished.compareAndSet(false, true)) {
+                        timedOut.set(true)
+                        request.cancel()
+                    }
+                } catch (_: InterruptedException) {
+                    // The request completed before its timeout.
+                }
+            },
+            "xcertplay-usbmux-timeout",
+        ).apply {
+            isDaemon = true
+            start()
+        }
+        return try {
+            val completed = connection.requestWait()
+            if (timedOut.get()) null else completed
+        } finally {
+            finished.set(true)
+            cancellation.interrupt()
+        }
+    }
+
+    @android.annotation.TargetApi(Build.VERSION_CODES.O)
     private fun drainCancelledRead(request: UsbRequest) {
         if (!request.cancel()) {
             throw failSession("Android could not cancel timed out USBMUX read request")

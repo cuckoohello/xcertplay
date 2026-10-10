@@ -95,12 +95,7 @@ internal class MicrophoneUplink(
         var filled = 0
         try {
             while (running.get()) {
-                val count = activeRecorder.read(
-                    readBuffer,
-                    0,
-                    readBuffer.size,
-                    AudioRecord.READ_BLOCKING,
-                )
+                val count = readMicrophoneRecorder(activeRecorder, readBuffer)
                 if (count < 0) {
                     if (running.get()) Log.e(TAG, "microphone read failed code=$count")
                     return

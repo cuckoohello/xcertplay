@@ -149,9 +149,10 @@ class CarPlayController(
     private enum class Phase { IDLE, MFI, WIRELESS, IPHONE, REENUMERATION, DATAPATHS, CONTROL }
 
     private val appContext = context.applicationContext
-    private val usbManager = context.getSystemService(UsbManager::class.java)
+    private val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+        ?: throw IllegalStateException("UsbManager is unavailable")
     private val bluetoothAdapter =
-        appContext.getSystemService(BluetoothManager::class.java)?.adapter
+        (appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
     private val iphoneHost = IphoneUsbHost(
         appContext,
         usbManager,
@@ -1191,23 +1192,23 @@ class CarPlayController(
         generation: Int,
         mfi: MfiAuthenticator,
     ): WirelessHotspotInfo {
-        val hotspotMode = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
-            config.wirelessHotspotMode == WirelessHotspotMode.WIFI_P2P
-        ) {
-            WirelessHotspotMode.LOCAL_ONLY_HOTSPOT
-        } else {
-            config.wirelessHotspotMode
-        }
+        val hotspotMode = config.wirelessHotspotMode
         val manager: WirelessHotspotManager = when (hotspotMode) {
             WirelessHotspotMode.WIFI_P2P ->
-                mfiCertificateWifiP2pCredentials(mfi.readCertificate()).let { credentials ->
-                    WifiP2pGroupManager(
-                        context = appContext,
-                        networkName = credentials.ssid,
-                        passphrase = credentials.passphrase,
-                    )
+                WifiP2pGroupManager(
+                    context = appContext,
+                    requestedCredentials = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        mfiCertificateWifiP2pCredentials(mfi.readCertificate())
+                    } else {
+                        null
+                    },
+                )
+            WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                    throw IOException("LocalOnlyHotspot requires Android 8.0 (API 26) or newer")
                 }
-            WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> LocalOnlyHotspotManager(appContext)
+                LocalOnlyHotspotManager(appContext)
+            }
             WirelessHotspotMode.MANUAL -> ManualHotspotManager(
                 context = appContext,
                 ssid = config.manualHotspotSsid
@@ -1255,19 +1256,14 @@ class CarPlayController(
         if (smartPhones.isEmpty()) {
             throw IOException("No bonded PHONE_SMART devices found; pair an iPhone and retry")
         }
-        val directlyConnectedSmartPhones = smartPhones.filter(::isBluetoothDeviceConnected)
+        val connectedAddresses = connectedBluetoothDevices(adapter).mapTo(mutableSetOf()) {
+            it.address
+        }
         Log.i(
             IphoneCarPlayConfiguration.TAG,
             "wireless Bluetooth bondedSmartPhones=${smartPhones.size} " +
-                "directlyConnected=${directlyConnectedSmartPhones.size}",
+                "connectedProfiles=${connectedAddresses.size}",
         )
-        val connectedAddresses = if (directlyConnectedSmartPhones.isNotEmpty()) {
-            directlyConnectedSmartPhones.mapTo(mutableSetOf()) { it.address }
-        } else {
-            connectedBluetoothDevices(adapter).mapTo(mutableSetOf()) {
-                it.address
-            }
-        }
         return smartPhones.sortedWith(
             compareByDescending<BluetoothDevice> { it.address in connectedAddresses }
                 .thenBy { it.address },
@@ -1383,16 +1379,6 @@ class CarPlayController(
         wirelessActiveReported.set(false)
 
         if (service != null) closeBestEffort("AirPlay service") { service.detach() }
-    }
-
-    private fun isBluetoothDeviceConnected(device: BluetoothDevice): Boolean = try {
-        val method = BluetoothDevice::class.java.getMethod("isConnected")
-        method.invoke(device) as? Boolean == true
-    } catch (error: ReflectiveOperationException) {
-        false
-    } catch (error: RuntimeException) {
-        Log.w(IphoneCarPlayConfiguration.TAG, "Could not read Bluetooth connection state", error)
-        false
     }
 
     private fun connectedBluetoothDevices(adapter: BluetoothAdapter): Set<BluetoothDevice> =
